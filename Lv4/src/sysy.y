@@ -9,6 +9,7 @@
 #include <iostream>
 #include <memory>
 #include <string>
+#include <deque>
 #include "include/ast.hpp"
 
 // declare lexer function and error handling function
@@ -25,20 +26,29 @@ using namespace std;
   std::string *str_val;
   int int_val;
   BaseAST *ast_val;
+  std::deque<std::unique_ptr<BaseAST>> *deque_val;
 }
 
 
 // lexer 返回的所有 token 种类的声明, 终结符的类型为 str_val 和 int_val
-%token INT RETURN
+%token INT RETURN CONST
 %token <str_val> IDENT
 %token <int_val> INT_CONST
 %token <str_val> EXCLUSIVE_UNARY_OP MUL_OP ADD_OP REL_OP EQ_OP AND_OP OR_OP // Operators
 
 // 非终结符的类型定义
-%type <ast_val> FuncDef FuncType Block Stmt Exp UnaryExp PrimaryExp MulExp AddExp LOrExp LAndExp RelExp EqExp
+%type <ast_val> FuncDef FuncType Block BlockItem Stmt // Program Unit
+%type <ast_val> Decl BType ConstDecl ConstDef ConstInitVal VarDecl VarDef InitVal // Declaration
+%type <ast_val> Exp ConstExp LVal UnaryExp PrimaryExp MulExp AddExp LOrExp LAndExp RelExp EqExp // Expression
 %type <int_val> Number
+%type <deque_val> ExtendBlockItem ExtendConstDef ExtendVarDef
 
 %%
+
+//////////////////////////////////////////
+// Program Unit
+//////////////////////////////////////////
+
 
 CompUnit
   : FuncDef {
@@ -67,9 +77,40 @@ FuncType
   ;
 
 Block
-  : '{' Stmt '}' {
+  : '{' BlockItem ExtendBlockItem '}' {
     auto ast = new BlockAST();
-    ast->stmt = unique_ptr<BaseAST>($2);
+    ast->block_items.push_back(unique_ptr<BaseAST>($2));
+    for (auto& ptr : *$3) {
+      ast->block_items.push_back(std::move(ptr));
+    }
+    $$ = ast;
+  }
+  | '{' '}' {
+    auto ast = new BlockAST();
+    $$ = ast;
+  }
+  ;
+
+ExtendBlockItem
+  : {
+    $$ = new deque<unique_ptr<BaseAST>>;
+  }
+  | BlockItem ExtendBlockItem {
+    deque<unique_ptr<BaseAST>> *deque = $2;
+    deque->push_front(unique_ptr<BaseAST>($1));
+    $$ = deque;
+  }
+  ;
+
+BlockItem
+  : Stmt {
+    auto ast = new BlockItemAST();
+    ast->stmt = unique_ptr<BaseAST>($1);
+    $$ = ast;
+  }
+  | Decl {
+    auto ast = new BlockItemAST();
+    ast->decl = unique_ptr<BaseAST>($1);
     $$ = ast;
   }
   ;
@@ -80,7 +121,127 @@ Stmt
     ast->exp = unique_ptr<BaseAST>($2);
     $$ = ast;
   }
+  | LVal '=' Exp ';' {
+    auto ast = new StmtAST();
+    ast->lval = unique_ptr<BaseAST>($1);
+    ast->exp = unique_ptr<BaseAST>($3);
+    $$ = ast;
+  }
   ;
+
+//////////////////////////////////////////
+// Declaration
+//////////////////////////////////////////
+
+Decl
+  : ConstDecl {
+    auto ast = new DeclAST();
+    ast->const_decl = unique_ptr<BaseAST>($1);
+    $$ = ast;
+  }
+  | VarDecl {
+    auto ast = new DeclAST();
+    ast->var_decl = unique_ptr<BaseAST>($1);
+    $$ = ast;
+  }
+  ;
+
+BType
+  : INT {
+    auto ast = new BTypeAST();
+    ast->type = "int";
+    $$ = ast;
+  }
+  ;
+
+ConstDecl
+  : CONST BType ConstDef ExtendConstDef ';' {
+    auto ast = new ConstDeclAST();
+    ast->btype = unique_ptr<BaseAST>($2);
+    ast->const_defs.push_back(unique_ptr<BaseAST>($3));
+    for (auto& ptr : *$4) {
+      ast->const_defs.push_back(std::move(ptr));
+    }
+    $$ = ast;
+  }
+  ;
+
+ExtendConstDef
+  : {
+    $$ = new deque<unique_ptr<BaseAST>>;
+  }
+  | ',' ConstDef ExtendConstDef {
+    deque<unique_ptr<BaseAST>> *deque = $3;
+    deque->push_front(unique_ptr<BaseAST>($2));
+    $$ = deque;
+  }
+  ;
+
+ConstDef
+  : IDENT '=' ConstInitVal {
+    auto ast = new ConstDefAST();
+    ast->const_symbol = *unique_ptr<string>($1);
+    ast->const_init_val = unique_ptr<BaseAST>($3);
+    $$ = ast;
+  }
+  ;
+
+ConstInitVal
+  : ConstExp {
+    auto ast = new ConstInitValAST();
+    ast->const_exp = unique_ptr<BaseAST>($1);
+    $$ = ast;
+  }
+  ;
+
+VarDecl
+  : BType VarDef ExtendVarDef ';' {
+    auto ast = new VarDeclAST();
+    ast->btype = unique_ptr<BaseAST>($1);
+    ast->var_defs.push_back(unique_ptr<BaseAST>($2));
+    for (auto& ptr : *$3) {
+      ast->var_defs.push_back(std::move(ptr));
+    }
+    $$ = ast;
+  }
+  ;
+
+ExtendVarDef
+  : {
+    $$ = new deque<unique_ptr<BaseAST>>;
+  }
+  | ',' VarDef ExtendVarDef {
+    deque<unique_ptr<BaseAST>> *deque = $3;
+    deque->push_front(unique_ptr<BaseAST>($2));
+    $$ = deque;
+  }
+  ;
+
+VarDef
+  : IDENT {
+    auto ast = new VarDefAST();
+    ast->var_symbol = *unique_ptr<string>($1);
+    $$ = ast;
+  }
+  | IDENT '=' InitVal {
+    auto ast = new VarDefAST();
+    ast->var_symbol = *unique_ptr<string>($1);
+    ast->var_init_val = unique_ptr<BaseAST>($3);
+    $$ = ast;
+  }
+  ;
+
+InitVal
+  : Exp {
+    auto ast = new InitValAST();
+    ast->exp = unique_ptr<BaseAST>($1);
+    $$ = ast;
+  }
+  ;
+
+//////////////////////////////////////////
+// Expression
+//////////////////////////////////////////
 
 Number
   : INT_CONST {
@@ -96,6 +257,22 @@ Exp
   }
   ;
 
+ConstExp
+  : Exp {
+    auto ast = new ConstExpAST();
+    ast->exp = unique_ptr<BaseAST>($1);
+    $$ = ast;
+  }
+  ;
+
+LVal
+  : IDENT {
+    auto ast = new LValAST();
+    ast->left_value_symbol = *unique_ptr<string>($1);
+    $$ = ast;
+  }
+  ;
+
 PrimaryExp
   : '(' Exp ')' {
     auto ast = new PrimaryExpAST();
@@ -105,6 +282,11 @@ PrimaryExp
   | Number {
     auto ast = new PrimaryExpAST();
     ast->number = $1;
+    $$ = ast;
+  }
+  | LVal {
+    auto ast = new PrimaryExpAST();
+    ast->lval = unique_ptr<BaseAST>($1);
     $$ = ast;
   }
   ;

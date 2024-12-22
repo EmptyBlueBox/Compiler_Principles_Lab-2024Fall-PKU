@@ -39,25 +39,20 @@ OrOp          "||"
 
 %%
 
-// 空白符和注释
 {WhiteSpace}    { /* 忽略, 不做任何操作 */ }
 {LineComment}   { /* 忽略, 不做任何操作 */ }
 {BlockComment}  { /* 忽略, 不做任何操作 */ }
 
-// 保留字
 "int"           { return INT; }
 "return"        { return RETURN; }
 "const"         { return CONST; }
 
-// 标识符
 {Identifier}    { yylval.str_val = new string(yytext); return IDENT; }
 
-// 整数字面量
 {Decimal}       { yylval.int_val = strtol(yytext, nullptr, 0); return INT_CONST; }
 {Octal}         { yylval.int_val = strtol(yytext, nullptr, 0); return INT_CONST; }
 {Hexadecimal}   { yylval.int_val = strtol(yytext, nullptr, 0); return INT_CONST; }
 
-// 运算符
 {ExclusiveUnaryOp}      { yylval.str_val = new string(yytext); return EXCLUSIVE_UNARY_OP; }
 {MulOp}                 { yylval.str_val = new string(yytext); return MUL_OP; }
 {AddOp}                 { yylval.str_val = new string(yytext); return ADD_OP; }

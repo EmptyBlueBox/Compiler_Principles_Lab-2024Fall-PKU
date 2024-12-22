@@ -11,62 +11,16 @@
 
 #include <memory>
 #include <string>
+#include <deque>
 #include <iostream>
 #include <sstream>
-#include <optional> // --std=c++17
+#include <optional> // --std=c++17 is needed
 
-/**
- * @brief 用于存储计算结果的类，可以是符号或立即数。
- * @note 如果当前函数会产生一个计算结果, 那么这个计算结果会存储在返回的 `Result` 类型的变量中
- * @note 比如 `PrimaryExpAST` 的 `print` 函数, 当它是从数字规约而来时, 它的 `Result` 变量会被初始化为立即数, 返回 `Result(Result::Type::IMM, *number)` 这样一个变量
- * @note 如果当前函数不会产生计算结果, 那么返回的 `Result` 变量会被初始化为立即数 0
- * @date 2024-11-27
- */
-class Result
-{
-public:
-    /**
-     * @brief 当前计算值，存储在 `%current_value_symbol_index` 符号中。
-     * @date 2024-11-27
-     */
-    static int current_symbol_index;
+#include "define.hpp"
 
-    enum class Type
-    {
-        IMM, // 立即数
-        REG  // 寄存器
-    };
-    Type type; // 结果的类型
-    int val;   // 结果的值
-
-    // 默认构造函数，初始化为立即数 0, 没有用到的地方
-    Result() : type(Type::IMM), val(0) {}
-
-    // 带有指定类型的构造函数, 主要用来初始化寄存器
-    Result(Type type) : type(type), val(0)
-    {
-        if (type == Type::REG)
-        {
-            val = ++current_symbol_index;
-        }
-    }
-
-    // 带有指定类型和值的构造函数, 主要用来初始化立即数
-    Result(Type type, int val) : type(type), val(val)
-    {
-        if (type == Type::REG)
-        {
-            val = ++current_symbol_index;
-        }
-    }
-
-    // 重载 <<
-    friend std::ostream &operator<<(std::ostream &os, const Result &result)
-    {
-        os << (result.type == Result::Type::REG ? "%" : "") << result.val;
-        return os;
-    }
-};
+//////////////////////////////////////////
+// Program Unit
+//////////////////////////////////////////
 
 /**
  * @brief 所有抽象语法树节点的基类。
@@ -85,10 +39,6 @@ public:
      */
     virtual Result print(std::stringstream &output_stream) const = 0;
 };
-
-//////////////////////////////////////////
-// 程序单元
-//////////////////////////////////////////
 
 /**
  * @brief 程序单元抽象语法树类。
@@ -153,7 +103,38 @@ public:
 class BlockAST : public BaseAST
 {
 public:
-    std::unique_ptr<BaseAST> stmt; // 块中的语句
+    std::deque<std::unique_ptr<BaseAST>> block_items;
+    /**
+     * @brief 打印抽象语法树。
+     * @param[in] output_stream 输出流。
+     * @return 打印操作的结果。
+     * @date 2024-10-27
+     */
+    Result print(std::stringstream &output_stream) const override;
+};
+
+/**
+ * @brief 块中的声明或语句 (Statement)
+ * @date 2024-12-22
+ */
+class BlockItemAST : public BaseAST
+{
+public:
+    std::optional<std::unique_ptr<BaseAST>> stmt;
+    std::optional<std::unique_ptr<BaseAST>> decl;
+    Result print(std::stringstream &output_stream) const override;
+};
+
+/**
+ * @brief 语句抽象语法树类。
+ * @note 语句有两种：赋值语句和 return 语句, 这两个语句都必然有表达式, 但是只有赋值语句有左值, 所以 `lval` 是可选的, 而 `exp` 是必选的
+ * @date 2024-10-27
+ */
+class StmtAST : public BaseAST
+{
+public:
+    std::optional<std::unique_ptr<BaseAST>> lval; // 语句中的左值
+    std::unique_ptr<BaseAST> exp;                 // 语句中的表达式
 
     /**
      * @brief 打印抽象语法树。
@@ -165,25 +146,106 @@ public:
 };
 
 /**
- * @brief 语句抽象语法树类。
- * @date 2024-10-27
+ * @brief 声明
+ * @date 2024-12-22
  */
-class StmtAST : public BaseAST
+class DeclAST : public BaseAST
 {
 public:
-    std::unique_ptr<BaseAST> exp; // 语句中的表达式
-
-    /**
-     * @brief 打印抽象语法树。
-     * @param[in] output_stream 输出流。
-     * @return 打印操作的结果。
-     * @date 2024-10-27
-     */
+    std::optional<std::unique_ptr<BaseAST>> const_decl;
+    std::optional<std::unique_ptr<BaseAST>> var_decl;
     Result print(std::stringstream &output_stream) const override;
 };
 
 //////////////////////////////////////////
-// 表达式
+// Declaration
+//////////////////////////////////////////
+
+/**
+ * @brief 声明的类型
+ * @date 2024-12-22
+ */
+class BTypeAST : public BaseAST
+{
+public:
+    std::string type;
+    Result print(std::stringstream &output_stream) const override;
+};
+
+/**
+ * @brief 常量声明
+ * @date 2024-12-22
+ */
+class ConstDeclAST : public BaseAST
+{
+public:
+    std::unique_ptr<BaseAST> btype;
+    std::deque<std::unique_ptr<BaseAST>> const_defs;
+    Result print(std::stringstream &output_stream) const override;
+};
+
+/**
+ * @brief 常量定义
+ * @note 常量定义必然有初始值, 所以 `const_init_val` 是必选的
+ * @date 2024-12-22
+ */
+class ConstDefAST : public BaseAST
+{
+public:
+    std::string const_symbol;
+    std::unique_ptr<BaseAST> const_init_val;
+    Result print(std::stringstream &output_stream) const override;
+};
+
+/**
+ * @brief 常量初始值
+ * @date 2024-12-22
+ */
+class ConstInitValAST : public BaseAST
+{
+public:
+    std::unique_ptr<BaseAST> const_exp;
+    Result print(std::stringstream &output_stream) const override;
+};
+
+/**
+ * @brief 变量声明
+ * @date 2024-12-22
+ */
+class VarDeclAST : public BaseAST
+{
+public:
+    std::unique_ptr<BaseAST> btype;
+    std::deque<std::unique_ptr<BaseAST>> var_defs;
+    Result print(std::stringstream &output_stream) const override;
+};
+
+/**
+ * @brief 变量定义
+ * @note 变量定义和常量定义不同, 可以没有初始值, 所以 `var_init_val` 是可选的
+ * @date 2024-12-22
+ */
+class VarDefAST : public BaseAST
+{
+public:
+    std::string var_symbol;
+    std::optional<std::unique_ptr<BaseAST>> var_init_val;
+    Result print(std::stringstream &output_stream) const override;
+};
+
+/**
+ * @brief 变量初始值
+ * @date 2024-12-22
+ */
+class InitValAST : public BaseAST
+{
+public:
+    std::unique_ptr<BaseAST> exp;
+    Result print(std::stringstream &output_stream) const override;
+};
+
+//////////////////////////////////////////
+// Expression and Left Value Definition
 //////////////////////////////////////////
 
 /**
@@ -204,14 +266,37 @@ public:
 };
 
 /**
+ * @brief 常量表达式抽象语法树类。
+ * @date 2024-12-22
+ */
+class ConstExpAST : public BaseAST
+{
+public:
+    std::unique_ptr<BaseAST> exp;
+    Result print(std::stringstream &output_stream) const override;
+};
+
+/**
+ * @brief 左值抽象语法树类。
+ * @date 2024-12-22
+ */
+class LValAST : public BaseAST
+{
+public:
+    std::string left_value_symbol;
+    Result print(std::stringstream &output_stream) const override;
+};
+
+/**
  * @brief 基本表达式抽象语法树类。
  * @date 2024-10-27
  */
 class PrimaryExpAST : public BaseAST
 {
 public:
-    std::optional<std::unique_ptr<BaseAST>> exp; // 可选的表达式
-    std::optional<int> number;                   // 可选的数字
+    std::optional<std::unique_ptr<BaseAST>> exp;  // 可选的表达式
+    std::optional<std::unique_ptr<BaseAST>> lval; // 可选的左值
+    std::optional<int> number;                    // 可选的数字
 
     /**
      * @brief 打印抽象语法树。

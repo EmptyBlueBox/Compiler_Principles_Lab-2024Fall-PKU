@@ -1,6 +1,13 @@
 # Build directory
 build/
 debug/
+testcases
 
 # Mac OS
 .DS_Store
+
+# VSCode
+.vscode
+
+# Chore
+SysY-Compiler-2024Fall-PKU
