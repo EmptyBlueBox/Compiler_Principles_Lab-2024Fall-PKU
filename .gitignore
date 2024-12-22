@@ -1,5 +1,6 @@
 # Build directory
 build/
+debug/
 
 # Mac OS
 .DS_Store
