@@ -1,4 +1,4 @@
-#include "include/define.hpp"
+#include "include/util_koopa.hpp"
 
 void SymbolTable::create(const std::string &name, Symbol symbol)
 {

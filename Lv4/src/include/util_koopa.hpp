@@ -1,5 +1,5 @@
 /**
- * @brief 定义一些全局常量, 符号表等
+ * @brief 定义一些通用的类, 比如符号表等
  * @author Yutong Liang
  * @date 2024-11-13
  */
@@ -9,10 +9,6 @@
 #include <string>
 #include <iostream>
 #include <unordered_map>
-
-const std::string MODE_KOOPA = "-koopa";
-const std::string MODE_RISC_V = "-riscv";
-const std::string MODE_PERFORMANCE = "-perf";
 
 /**
  * @brief 用于存储计算结果的类，可以是符号或立即数。

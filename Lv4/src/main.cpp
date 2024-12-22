@@ -6,7 +6,6 @@
 
 #include "include/ast.hpp"
 #include "include/backend.hpp"
-#include "include/define.hpp"
 
 using namespace std;
 
@@ -38,12 +37,12 @@ int main(int argc, const char *argv[])
   std::stringstream koopa; // 用于存储中端过程输出的 koopa
 
   freopen(output, "w", stdout);
-  if (mode == MODE_KOOPA)
+  if (std::string(mode) == "-koopa")
   {
     ast->print(koopa);
     std::cout << koopa.str();
   }
-  else if (mode == MODE_RISC_V)
+  else if (std::string(mode) == "-riscv")
   {
     ast->print(koopa);
     backend(koopa.str().c_str());

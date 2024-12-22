@@ -1,6 +1,11 @@
 #include "include/backend.hpp"
+#include "include/util_riscv.hpp"
 
-RegisterManager register_manager;
+// 所有代码共用的寄存器和栈管理器
+ContextManager context_manager;
+
+// 所有代码共用的 RISC-V 汇编打印器
+RISCVPrinter riscv_printer;
 
 int backend(const char *koopa_str)
 {
@@ -26,9 +31,7 @@ int backend(const char *koopa_str)
     return 0;
 }
 
-// 进入每一个节点, 如果它包含很多同类型的东西, 比如一个函数有很多的基本块, 一个基本块有很多指令,
-// 那么这一堆基本块或者指令就会存在一个 raw slice 类型中, 所以只需要访问一次 raw slice 即可,
-// raw slice 会把这一堆东西逐个帮你访问
+// 进入每一个节点, 如果它包含很多同类型的东西, 比如一个函数有很多的基本块, 一个基本块有很多指令, 那么这一堆基本块或者指令就会存在一个 raw slice 类型中, 所以只需要访问一次 raw slice 即可, raw slice 会把这一堆东西逐个帮你访问
 void visit(const koopa_raw_slice_t &slice)
 {
     for (size_t i = 0; i < slice.len; ++i)
@@ -72,9 +75,41 @@ void visit(const koopa_raw_program_t &program)
 // 访问函数
 void visit(const koopa_raw_function_t &func)
 {
+    // 获得函数名
+    std::string function_name = func->name + 1;
+
+    // 输出 RISC-V 的 prologue
+    std::cout << "\t.globl " << function_name << std::endl;
+    std::cout << function_name << ":" << std::endl;
+
+    // 计算栈帧大小
+    // 如何判断一个指令存在返回值呢 ? 你也许还记得 Koopa IR 是强类型 IR, 所有指令都是有类型的.如果指令的类型为 unit(类似 C / C++ 中的 void), 则这条指令不存在返回值. 在 C / C++ 中, 每个 koopa_raw_value_t 都有一个名叫 ty 的字段, 它的类型是 koopa_raw_type_t.koopa_raw_type_t 中有一个字段叫做 tag, 存储了这个类型具体是何种类型.如果它的值为 KOOPA_RTT_UNIT, 说明这个类型是 unit 类型.或者你实在懒得判断的话,给所有指令都分配栈空间也不是不行, 只不过这样会浪费一些栈空间.
+    int num_stack_frame_byte = 0;
+    for (size_t i = 0; i < func->bbs.len; ++i)
+    {
+        auto bb = reinterpret_cast<koopa_raw_basic_block_t>(func->bbs.buffer[i]);
+        num_stack_frame_byte += bb->insts.len;
+        for (size_t j = 0; j < bb->insts.len; ++j)
+        {
+            auto inst = reinterpret_cast<koopa_raw_value_t>(bb->insts.buffer[j]);
+            if (inst->ty->tag == KOOPA_RTT_UNIT)
+            {
+                num_stack_frame_byte -= 1;
+            }
+        }
+    }
+
+    // 计算栈帧大小
+    num_stack_frame_byte *= 4;
+    num_stack_frame_byte = (num_stack_frame_byte + 15) / 16 * 16; // 对齐到 16 的倍数
+
+    // 初始化栈管理器
+    context_manager.init_stack_manager_for_one_function(function_name, num_stack_frame_byte);
+
+    // 继续输出 RISC-V 的 prologue
+    riscv_printer.addi("sp", "sp", -num_stack_frame_byte);
+
     // 访问所有基本块
-    std::cout << "\t.globl " << func->name + 1 << std::endl;
-    std::cout << func->name + 1 << ":" << std::endl;
     visit(func->bbs);
 }
 
@@ -105,194 +140,204 @@ void visit(const koopa_raw_value_t &value)
         // 访问 binary 指令
         visit(kind.data.binary, value);
         break;
+    case KOOPA_RVT_ALLOC:
+        // 访问 alloc 指令, 分配内存是实际存在的指令, 但是汇编语言的内存分配是直接用栈指针管理的, 所以不需要显式的内存分配, 可以忽略 koopa 的 alloc 指令
+        // 比如 @x = alloc i32 这样一个指令, 如果只有这个指令本身, 并不需要做任何操作也能保证 RISC-V 的正确性
+        // 只有在使用了 @x 的时候, 比如 store 10, @x 这样的指令, 才需要设定 @x 的栈地址, 所以 alloc 指令可以忽略
+        break;
+    case KOOPA_RVT_LOAD:
+        // 访问 load 指令
+        visit(kind.data.load, value);
+        break;
+    case KOOPA_RVT_STORE:
+        // 访问 store 指令
+        visit(kind.data.store, value);
+        break;
     default:
         // 其他类型暂时遇不到
         throw std::runtime_error("visit: invalid instruction");
     }
 }
 
+// 访问 load 指令, load 的输入和输出都必然是内存
+void visit(const koopa_raw_load_t &load, const koopa_raw_value_t &value)
+{
+    // 当前函数的 StackManager
+    StackManager &stack_manager = context_manager.get_current_function_stack_manager();
+    // 给中间结果分配一个寄存器, 这个寄存器对应 value, 为什么不用临时寄存器? 因为 lw 和 sw 也可能使用寄存器, 可能造成冲突
+    context_manager.allocate_reg(value);
+    std::string temp_reg_name = context_manager.value_to_reg_string(value);
+    // 从栈中加载数据到寄存器
+    riscv_printer.lw(temp_reg_name, "sp", stack_manager.get_value_stack_offset(load.src), context_manager);
+    // 将数据保存到栈中, 更新栈帧使用情况, 同时输出 sw 指令
+    stack_manager.save_value_to_stack(value);
+    riscv_printer.sw(temp_reg_name, "sp", stack_manager.get_value_stack_offset(value), context_manager);
+    // 当前操作数所在的寄存器已经被使用过了, 释放
+    context_manager.set_reg_free(value);
+}
+
+// 访问 store 指令, store 的输出必然是内存, 但是输入可能是内存或者立即数
+void visit(const koopa_raw_store_t &store, const koopa_raw_value_t &value)
+{
+    // 当前函数的 StackManager
+    StackManager &stack_manager = context_manager.get_current_function_stack_manager();
+    // 给中间结果分配一个寄存器, 这个寄存器对应 value
+    context_manager.allocate_reg(value);
+    std::string temp_reg_name = context_manager.value_to_reg_string(value);
+    // 判断 store.value 是否是立即数, 如果是立即数, 则需要先分配一个临时寄存器, 如果是内存, 则从内存中 lw 出来
+    if (store.value->kind.tag == KOOPA_RVT_INTEGER)
+    {
+        riscv_printer.li(temp_reg_name, store.value->kind.data.integer.value);
+    }
+    else
+    {
+        riscv_printer.lw(temp_reg_name, "sp", stack_manager.get_value_stack_offset(store.value), context_manager);
+    }
+    // 保存 store.dest 到栈中
+    stack_manager.save_value_to_stack(store.dest);
+    riscv_printer.sw(temp_reg_name, "sp", stack_manager.get_value_stack_offset(store.dest), context_manager);
+    // 当前操作数所在的寄存器已经被使用过了, 释放
+    context_manager.set_reg_free(value);
+}
+
 // 访问 return 指令
 void visit(const koopa_raw_return_t &ret)
 {
-    // std::cerr << "visit return" << std::endl;
     // 根据 ret 的 value 类型判断后续需要如何访问
     if (ret.value)
     {
         // 特判如果是立即数, 则直接赋值给 a0 寄存器, 跳过访问 value 的过程
         if (ret.value->kind.tag == KOOPA_RVT_INTEGER)
         {
-            std::cout << "\tli a0, " << ret.value->kind.data.integer.value << std::endl;
+            riscv_printer.li("a0", ret.value->kind.data.integer.value);
         }
-        // 否则, 访问这个值, 然后把这个值存储在的寄存器名称移动给 a0 寄存器, 注意不是 li
+        // 否则, 访问这个值, 然后把这个值存储在的内存移动给 a0 寄存器, 注意不是 li
         else
         {
-            bool is_allocated = register_manager.exist(ret.value);
-            if (!is_allocated)
-            {
-                visit(ret.value);
-            }
-            std::cout << "\tmv a0, " << register_manager.value_to_reg_string(ret.value) << std::endl;
+            // 当前函数的 StackManager
+            StackManager &stack_manager = context_manager.get_current_function_stack_manager();
+            // 将 ret.value 的值从栈中加载到 a0 寄存器
+            riscv_printer.lw("a0", "sp", stack_manager.get_value_stack_offset(ret.value), context_manager);
         }
     }
     // 如果 ret 的 value 为空, 则直接赋值 0 给 a0 寄存器, 然后返回
     else
     {
-        std::cout << "\tli a0, 0" << std::endl;
+        riscv_printer.li("a0", 0);
     }
-    std::cout << "\tret" << std::endl;
+    // 恢复栈帧
+    StackManager &stack_manager = context_manager.get_current_function_stack_manager();
+    riscv_printer.addi("sp", "sp", stack_manager.get_num_stack_frame_byte());
+    // 返回
+    riscv_printer.ret();
 }
 
 // 访问 integer
 void visit(const koopa_raw_integer_t &integer, const koopa_raw_value_t &value)
 {
-    // std::cerr << "visit integer" << std::endl;
     if (integer.value == 0)
     {
-        register_manager.allocate_reg(value, true);
+        context_manager.allocate_reg(value, true);
     }
     else
     {
-        register_manager.allocate_reg(value);
-        std::cout << "\tli " << register_manager.value_to_reg_string(value) << ", " << integer.value << std::endl;
+        context_manager.allocate_reg(value);
+        riscv_printer.li(context_manager.value_to_reg_string(value), integer.value);
     }
 }
 
 // 访问 binary 指令
 void visit(const koopa_raw_binary_t &binary, const koopa_raw_value_t &value)
 {
-    // std::cerr << "visit binary" << std::endl;
-    // lhs 和 rhs 是否已经分配过寄存器, 如果没分配过, 则需要先访问 lhs 和 rhs, 访问过程中会分配寄存器, 注意 ricsv 不能直接操作立即数, 必须先加载到寄存器中!
-    bool lhs_is_allocated = register_manager.exist(binary.lhs);
-    if (!lhs_is_allocated)
+    // 判断 lhs 是立即数还是内存, 如果是立即数就 li, 否则就 lw
+    context_manager.allocate_reg(binary.lhs);
+    std::string lhs = context_manager.value_to_reg_string(binary.lhs);
+    if (binary.lhs->kind.tag == KOOPA_RVT_INTEGER)
     {
-        visit(binary.lhs);
+        riscv_printer.li(lhs, binary.lhs->kind.data.integer.value);
     }
-    bool rhs_is_allocated = register_manager.exist(binary.rhs);
-    if (!rhs_is_allocated)
+    else
     {
-        visit(binary.rhs);
+        // 当前函数的 StackManager
+        StackManager &stack_manager = context_manager.get_current_function_stack_manager();
+        // 从栈中加载数据到寄存器
+        riscv_printer.lw(lhs, "sp", stack_manager.get_value_stack_offset(binary.lhs), context_manager);
     }
-    // 我们认为每个结果仅使用一次, 所以可以设置两个子结果的寄存器可以被覆盖了.
-    // 比如将立即数转移给 a0 寄存器, 我们现在就认为 a0 寄存器被占用了, 但是如果 a0 寄存器之后被调用了, 这个立即数被使用过了, 那么 a0 寄存器就会被标记为不被占用, 因为到目前为止我们认为每一个结果只被使用一次
-    register_manager.set_reg_free(binary.lhs);
-    register_manager.set_reg_free(binary.rhs);
-    register_manager.allocate_reg(value);
+    // 判断 rhs 是立即数还是内存, 如果是立即数就 li, 否则就 lw
+    context_manager.allocate_reg(binary.rhs);
+    std::string rhs = context_manager.value_to_reg_string(binary.rhs);
+    if (binary.rhs->kind.tag == KOOPA_RVT_INTEGER)
+    {
+        riscv_printer.li(rhs, binary.rhs->kind.data.integer.value);
+    }
+    else
+    {
+        // 当前函数的 StackManager
+        StackManager &stack_manager = context_manager.get_current_function_stack_manager();
+        // 从栈中加载数据到寄存器
+        riscv_printer.lw(rhs, "sp", stack_manager.get_value_stack_offset(binary.rhs), context_manager);
+    }
 
-    // 获取当前结果, lhs 和 rhs 对应的寄存器名称
-    std::string cur = register_manager.value_to_reg_string(value);
-    std::string lhs = register_manager.value_to_reg_string(binary.lhs);
-    std::string rhs = register_manager.value_to_reg_string(binary.rhs);
+    // 给结果分配一个寄存器, 分配之前可以先释放掉 lhs 和 rhs 对应的寄存器, 因为他们相当于已经加载进来了
+    context_manager.set_reg_free(binary.lhs);
+    context_manager.set_reg_free(binary.rhs);
+    context_manager.allocate_reg(value);
+    std::string cur = context_manager.value_to_reg_string(value);
 
     // 根据二元运算符的类型进行处理
     switch (binary.op)
     {
     case KOOPA_RBO_EQ:
-        std::cout << "\txor " << cur << ", " << lhs << ", " << rhs << std::endl;
-        std::cout << "\tseqz " << cur << ", " << cur << std::endl;
+        riscv_printer.xor_(cur, lhs, rhs);
+        riscv_printer.seqz(cur, cur);
         break;
     case KOOPA_RBO_NOT_EQ:
-        std::cout << "\txor " << cur << ", " << lhs << ", " << rhs << std::endl;
-        std::cout << "\tsnez " << cur << ", " << cur << std::endl;
+        riscv_printer.xor_(cur, lhs, rhs);
+        riscv_printer.snez(cur, cur);
         break;
     case KOOPA_RBO_GT:
-        std::cout << "\tsgt " << cur << ", " << lhs << ", " << rhs << std::endl;
+        riscv_printer.sgt(cur, lhs, rhs);
         break;
     case KOOPA_RBO_LT:
-        std::cout << "\tslt " << cur << ", " << lhs << ", " << rhs << std::endl;
+        riscv_printer.slt(cur, lhs, rhs);
         break;
     case KOOPA_RBO_GE:
-        std::cout << "\tslt " << cur << ", " << lhs << ", " << rhs << std::endl;
-        std::cout << "\tseqz " << cur << ", " << cur << std::endl;
+        riscv_printer.slt(cur, lhs, rhs);
+        riscv_printer.seqz(cur, cur);
         break;
     case KOOPA_RBO_LE:
-        std::cout << "\tsgt " << cur << ", " << lhs << ", " << rhs << std::endl;
-        std::cout << "\tseqz " << cur << ", " << cur << std::endl;
+        riscv_printer.sgt(cur, lhs, rhs);
+        riscv_printer.seqz(cur, cur);
         break;
     case KOOPA_RBO_ADD:
-        std::cout << "\tadd " << cur << ", " << lhs << ", " << rhs << std::endl;
+        riscv_printer.add(cur, lhs, rhs);
         break;
     case KOOPA_RBO_SUB:
-        std::cout << "\tsub " << cur << ", " << lhs << ", " << rhs << std::endl;
+        riscv_printer.sub(cur, lhs, rhs);
         break;
     case KOOPA_RBO_MUL:
-        std::cout << "\tmul " << cur << ", " << lhs << ", " << rhs << std::endl;
+        riscv_printer.mul(cur, lhs, rhs);
         break;
     case KOOPA_RBO_DIV:
-        std::cout << "\tdiv " << cur << ", " << lhs << ", " << rhs << std::endl;
+        riscv_printer.div(cur, lhs, rhs);
         break;
     case KOOPA_RBO_MOD:
-        std::cout << "\trem " << cur << ", " << lhs << ", " << rhs << std::endl;
+        riscv_printer.rem(cur, lhs, rhs);
         break;
     case KOOPA_RBO_AND:
-        std::cout << "\tand " << cur << ", " << lhs << ", " << rhs << std::endl;
+        riscv_printer.and_(cur, lhs, rhs);
         break;
     case KOOPA_RBO_OR:
-        std::cout << "\tor " << cur << ", " << lhs << ", " << rhs << std::endl;
+        riscv_printer.or_(cur, lhs, rhs);
         break;
     default:
         throw std::runtime_error("visit: invalid binary operator");
     }
-}
-
-void RegisterManager::set_reg_free(const koopa_raw_value_t &value)
-{
-    _reg_is_used[value_to_reg_string(value)] = false;
-}
-
-bool RegisterManager::exist(const koopa_raw_value_t &value)
-{
-    return _value_to_reg_string.find(value) != _value_to_reg_string.end();
-}
-
-void RegisterManager::allocate_reg(const koopa_raw_value_t &value, bool is_zero)
-{
-    if (_value_to_reg_string.find(value) != _value_to_reg_string.end())
-    {
-        throw std::runtime_error("allocate_reg: value already allocated, the value kind is " + std::to_string(value->kind.tag) + "\n0: Integer, 12: Binary");
-    }
-    if (is_zero)
-    {
-        _set_value_to_reg_string(value, "x0");
-        return;
-    }
-    else
-    {
-        // 选择一个未被占用的寄存器
-        for (int i = 0; i <= 6; ++i)
-        {
-            if (!_reg_is_used["t" + std::to_string(i)])
-            {
-                _set_value_to_reg_string(value, "t" + std::to_string(i));
-                _reg_is_used["t" + std::to_string(i)] = true;
-                return;
-            }
-        }
-        for (int i = 0; i <= 7; ++i)
-        {
-            if (!_reg_is_used["a" + std::to_string(i)])
-            {
-                _set_value_to_reg_string(value, "a" + std::to_string(i));
-                _reg_is_used["a" + std::to_string(i)] = true;
-                return;
-            }
-        }
-    }
-}
-
-std::string RegisterManager::value_to_reg_string(const koopa_raw_value_t &value)
-{
-    if (_value_to_reg_string.find(value) == _value_to_reg_string.end())
-    {
-        throw std::runtime_error("value_to_reg_string: value not found");
-    }
-    return _value_to_reg_string[value];
-}
-
-void RegisterManager::_set_value_to_reg_string(const koopa_raw_value_t &value, const std::string &reg_string)
-{
-    if (_value_to_reg_string.find(value) != _value_to_reg_string.end())
-    {
-        throw std::runtime_error("_set_value_to_reg_string: value already exists in the map, the value kind is " + std::to_string(value->kind.tag) + "\n0: Integer, 12: Binary");
-    }
-    _value_to_reg_string[value] = reg_string;
+    // 当前函数的 StackManager
+    StackManager &stack_manager = context_manager.get_current_function_stack_manager();
+    // 把结果存回栈中
+    stack_manager.save_value_to_stack(value);
+    riscv_printer.sw(cur, "sp", stack_manager.get_value_stack_offset(value), context_manager);
+    // 当前结果所在的寄存器已经被使用过了, 释放
+    context_manager.set_reg_free(value);
 }

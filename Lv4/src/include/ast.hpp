@@ -16,7 +16,7 @@
 #include <sstream>
 #include <optional> // --std=c++17 is needed
 
-#include "define.hpp"
+#include "util_koopa.hpp"
 
 //////////////////////////////////////////
 // Program Unit
