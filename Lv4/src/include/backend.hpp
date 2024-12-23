@@ -90,14 +90,6 @@ void visit(const koopa_raw_store_t &store, const koopa_raw_value_t &value);
 void visit(const koopa_raw_return_t &ret);
 
 /**
- * @brief 访问 RISC-V 汇编代码的一个整数
- * @param[in] integer 内存中的 RISC-V 汇编代码整数
- * @author Yutong Liang
- * @date 2024-11-13
- */
-void visit(const koopa_raw_integer_t &integer, const koopa_raw_value_t &value);
-
-/**
  * @brief 访问 RISC-V 汇编代码的一条双目运算指令
  * @param[in] binary 双目运算指令
  * @param[in] value 这个双目运算指令本身的 value, 这是一个 **指针**, 用于找寻这个 value 存在哪个寄存器里面了

@@ -124,7 +124,9 @@ void visit(const koopa_raw_basic_block_t &bb)
 void visit(const koopa_raw_value_t &value)
 {
     // std::cerr << "visit value" << std::endl;
-    // 根据指令类型判断后续需要如何访问
+    // 根据指令类型判断后续需要如何访问, 注意这里只访问指令, 不访问立即数内存, 因为这样安排逻辑清晰, 保证了寄存器使用的解耦
+    // 比如 %1 = add %0, 1 这样的指令, 只访问 add 指令, 在访问 add 的时候不调用 visit( 立即数 1 ) , 而是直接将 1 加载到寄存器中, 所以访问立即数这个操作归访问 add 指令的时候处理
+    // 寄存器解耦: 可以保证以下每一个 visit 函数都对应一个 koopa 指令, 所以如下每一个 visit 函数都会使用后释放自己的寄存器, 没有寄存器依赖关系
     const auto &kind = value->kind;
     switch (kind.tag)
     {
@@ -132,12 +134,8 @@ void visit(const koopa_raw_value_t &value)
         // 访问 return 指令
         visit(kind.data.ret);
         break;
-    case KOOPA_RVT_INTEGER:
-        // 访问 integer 指令
-        visit(kind.data.integer, value);
-        break;
     case KOOPA_RVT_BINARY:
-        // 访问 binary 指令
+        // 访问 binary 计算指令
         visit(kind.data.binary, value);
         break;
     case KOOPA_RVT_ALLOC:
@@ -232,20 +230,6 @@ void visit(const koopa_raw_return_t &ret)
     riscv_printer.ret();
 }
 
-// 访问 integer
-void visit(const koopa_raw_integer_t &integer, const koopa_raw_value_t &value)
-{
-    if (integer.value == 0)
-    {
-        context_manager.allocate_reg(value, true);
-    }
-    else
-    {
-        context_manager.allocate_reg(value);
-        riscv_printer.li(context_manager.value_to_reg_string(value), integer.value);
-    }
-}
-
 // 访问 binary 指令
 void visit(const koopa_raw_binary_t &binary, const koopa_raw_value_t &value)
 {
@@ -278,7 +262,7 @@ void visit(const koopa_raw_binary_t &binary, const koopa_raw_value_t &value)
         riscv_printer.lw(rhs, "sp", stack_manager.get_value_stack_offset(binary.rhs), context_manager);
     }
 
-    // 给结果分配一个寄存器, 分配之前可以先释放掉 lhs 和 rhs 对应的寄存器, 因为他们相当于已经加载进来了
+    // 给结果分配一个寄存器, 分配之前可以先释放掉 lhs 和 rhs 对应的寄存器, 因为他们相当于已经加载进来了, 一会使用的时候可以覆盖, 比如 add t0, t0, t1
     context_manager.set_reg_free(binary.lhs);
     context_manager.set_reg_free(binary.rhs);
     context_manager.allocate_reg(value);
