@@ -20,9 +20,10 @@ Result FuncDefAST::print(std::stringstream &output_stream) const
 {
     output_stream << "fun @" << ident << "(): ";
     func_type->print(output_stream);
-    output_stream << " {\n";
+    output_stream << " {" << std::endl;
+    output_stream << "%entry:" << std::endl;
     Result result = block->print(output_stream);
-    output_stream << "}\n";
+    output_stream << "}" << std::endl;
     return result;
 }
 
@@ -41,7 +42,7 @@ Result FuncTypeAST::print(std::stringstream &output_stream) const
 
 Result BlockAST::print(std::stringstream &output_stream) const
 {
-    output_stream << "%entry:\n";
+    symbol_table.new_symbol_table_hierarchy();
     for (const auto &item : block_items)
     {
         if (!symbol_table.get_returned())
@@ -49,6 +50,7 @@ Result BlockAST::print(std::stringstream &output_stream) const
             item->print(output_stream);
         }
     }
+    symbol_table.delete_symbol_table_hierarchy();
     return Result();
 }
 
@@ -70,24 +72,75 @@ Result BlockItemAST::print(std::stringstream &output_stream) const
 
 Result StmtAST::print(std::stringstream &output_stream) const
 {
-    if (lval && exp)
+    if (stmt_type == StmtType::Assign)
     {
-        // 这里不能调用 lval->print , 因为这里的 lval 不应该作为一个引用 (左值) 出现, 这里需要一个字符串来判断符号是否已经存在
-        std::string symbol_name = ((LValAST *)(*lval).get())->left_value_symbol;
-        if (!symbol_table.exist(symbol_name))
+        if (lval && exp && !block)
         {
-            throw std::runtime_error("StmtAST::print: identifier does not exist");
+            // 这里不能调用 lval->print , 因为这里的 lval 不应该作为一个引用 (左值) 出现, 这里需要一个字符串来判断符号是否已经存在
+            std::string symbol_name = ((LValAST *)(*lval).get())->left_value_symbol;
+            Result result = (*exp)->print(output_stream);
+            Symbol symbol = symbol_table.read(symbol_name);
+            if (symbol.type == Symbol::Type::VAL)
+            {
+                throw std::runtime_error("StmtAST::print: assign to a constant");
+            }
+            std::string suffix = std::to_string(symbol.val);
+            std::string symbol_name_with_suffix = symbol_name + "_" + suffix;
+            output_stream << "\tstore " << result << ", @" << symbol_name_with_suffix << "\n";
+            return Result();
         }
-        Result result = exp->print(output_stream);
-        output_stream << "\tstore " << result << ", @" << symbol_name << "\n";
-        return Result();
+        else
+        {
+            throw std::runtime_error("StmtAST::print: invalid assign statement");
+        }
     }
-    else if (!lval && exp)
+    else if (stmt_type == StmtType::Return)
     {
-        Result result = exp->print(output_stream);
-        output_stream << "\tret " << result << "\n";
-        symbol_table.set_returned(true);
-        return Result();
+        if (!lval && exp && !block)
+        {
+            Result result = (*exp)->print(output_stream);
+            output_stream << "\tret " << result << "\n";
+            symbol_table.set_returned(true);
+            return Result();
+        }
+        else if (!lval && !exp && !block)
+        {
+            output_stream << "\tret\n";
+            symbol_table.set_returned(true);
+            return Result();
+        }
+        else
+        {
+            throw std::runtime_error("StmtAST::print: invalid return statement");
+        }
+    }
+    else if (stmt_type == StmtType::Expression)
+    {
+        if (!lval && exp && !block)
+        {
+            (*exp)->print(output_stream);
+            return Result(); // 表达式语句不会返回任何值
+        }
+        else if (!lval && !exp && !block)
+        {
+            return Result(); // 空表达式语句不会返回任何值
+        }
+        else
+        {
+            throw std::runtime_error("StmtAST::print: invalid expression statement");
+        }
+    }
+    else if (stmt_type == StmtType::Block)
+    {
+        if (!lval && !exp && block)
+        {
+            (*block)->print(output_stream);
+            return Result(); // 语句块不会返回任何值
+        }
+        else
+        {
+            throw std::runtime_error("StmtAST::print: invalid block statement");
+        }
     }
     else
     {
@@ -133,12 +186,8 @@ Result ConstDeclAST::print(std::stringstream &output_stream) const
 
 Result ConstDefAST::print(std::stringstream &output_stream) const
 {
-    if (symbol_table.exist(const_symbol))
-    {
-        throw std::runtime_error("ConstDefAST::print: const identifier already exists");
-    }
     Result value_result = const_init_val->print(output_stream);
-    symbol_table.create(const_symbol, Symbol(Symbol::Type::VAL, value_result.val));
+    symbol_table.insert_symbol(const_symbol, Symbol(Symbol::Type::VAL, value_result.val));
     return Result();
 }
 
@@ -161,14 +210,20 @@ Result VarDefAST::print(std::stringstream &output_stream) const
     if (var_init_val)
     {
         Result value_result = (*var_init_val)->print(output_stream);
-        output_stream << "\t@" << var_symbol << " = alloc i32\n"; // TODO: 这里需要根据类型分配空间, 但是类型保存在上一层 VarDeclAST 中的 btype 中, 访问不到, 但是暂时只需要处理 int 类型, 所以 hard code 即可
-        output_stream << "\tstore " << value_result << ", @" << var_symbol << "\n";
-        symbol_table.create(var_symbol, Symbol(Symbol::Type::VAR, value_result.val));
+        symbol_table.insert_symbol(var_symbol, Symbol(Symbol::Type::VAR, value_result.val));
+        std::string symbol_name = var_symbol;
+        std::string suffix = std::to_string(symbol_table.read(symbol_name).val);
+        std::string symbol_name_with_suffix = symbol_name + "_" + suffix;
+        output_stream << "\t@" << symbol_name_with_suffix << " = alloc i32\n"; // TODO: 这里需要根据类型分配空间, 但是类型保存在上一层 VarDeclAST 中的 btype 中, 访问不到, 但是暂时只需要处理 int 类型, 所以 hard code 即可
+        output_stream << "\tstore " << value_result << ", @" << symbol_name_with_suffix << "\n";
     }
     else
     {
-        output_stream << "\t@" << var_symbol << " = alloc i32\n";
-        symbol_table.create(var_symbol, Symbol(Symbol::Type::VAR, 0));
+        symbol_table.insert_symbol(var_symbol, Symbol(Symbol::Type::VAR, 0));
+        std::string symbol_name = var_symbol;
+        std::string suffix = std::to_string(symbol_table.read(symbol_name).val);
+        std::string symbol_name_with_suffix = symbol_name + "_" + suffix;
+        output_stream << "\t@" << symbol_name_with_suffix << " = alloc i32\n"; // TODO: 这里需要根据类型分配空间, 但是类型保存在上一层 VarDeclAST 中的 btype 中, 访问不到, 但是暂时只需要处理 int 类型, 所以 hard code 即可
     }
     return Result();
 }
@@ -195,14 +250,13 @@ Result ConstExpAST::print(std::stringstream &output_stream) const
 
 Result LValAST::print(std::stringstream &output_stream) const
 {
-    if (!symbol_table.exist(left_value_symbol))
-    {
-        throw std::runtime_error("LValAST::print: identifier does not exist");
-    }
     if (symbol_table.read(left_value_symbol).type == Symbol::Type::VAR)
     {
+        std::string symbol_name = left_value_symbol;
+        std::string suffix = std::to_string(symbol_table.read(symbol_name).val);
+        std::string symbol_name_with_suffix = symbol_name + "_" + suffix;
         Result result = Result(Result::Type::REG);
-        output_stream << "\t" << result << " = load @" << left_value_symbol << "\n";
+        output_stream << "\t" << result << " = load @" << symbol_name_with_suffix << "\n";
         return result;
     }
     else if (symbol_table.read(left_value_symbol).type == Symbol::Type::VAL)

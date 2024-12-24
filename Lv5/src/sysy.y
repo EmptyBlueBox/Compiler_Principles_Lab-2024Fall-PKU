@@ -116,15 +116,39 @@ BlockItem
   ;
 
 Stmt
-  : RETURN Exp ';' {
+  : LVal '=' Exp ';' {
     auto ast = new StmtAST();
+    ast->stmt_type = StmtAST::StmtType::Assign;
+    ast->lval = unique_ptr<BaseAST>($1);
+    ast->exp = unique_ptr<BaseAST>($3);
+    $$ = ast;
+  }
+  | Exp ';' {
+    auto ast = new StmtAST();
+    ast->stmt_type = StmtAST::StmtType::Expression;
+    ast->exp = unique_ptr<BaseAST>($1);
+    $$ = ast;
+  }
+  | ';' {
+    auto ast = new StmtAST();
+    ast->stmt_type = StmtAST::StmtType::Expression;
+    $$ = ast;
+  }
+  | Block {
+    auto ast = new StmtAST();
+    ast->stmt_type = StmtAST::StmtType::Block;
+    ast->block = unique_ptr<BaseAST>($1);
+    $$ = ast;
+  }
+  | RETURN Exp ';' {
+    auto ast = new StmtAST();
+    ast->stmt_type = StmtAST::StmtType::Return;
     ast->exp = unique_ptr<BaseAST>($2);
     $$ = ast;
   }
-  | LVal '=' Exp ';' {
+  | RETURN ';' {
     auto ast = new StmtAST();
-    ast->lval = unique_ptr<BaseAST>($1);
-    ast->exp = unique_ptr<BaseAST>($3);
+    ast->stmt_type = StmtAST::StmtType::Return;
     $$ = ast;
   }
   ;

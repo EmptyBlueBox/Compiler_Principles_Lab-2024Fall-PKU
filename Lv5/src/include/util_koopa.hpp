@@ -9,7 +9,7 @@
 #include <string>
 #include <iostream>
 #include <unordered_map>
-
+#include <vector>
 /**
  * @brief 用于存储计算结果的类，可以是符号或立即数。
  * @note 如果当前函数会产生一个计算结果, 那么这个计算结果会存储在返回的 `Result` 类型的变量中
@@ -76,7 +76,7 @@ public:
         VAL
     };
     Type type;
-    int val;
+    int val; // 如果 type 是 VAL, 那么 val 是立即数的数值; 如果 type 是 VAR, 那么 val 是变量的层级, 比如 `a = 2;` 如果在符号表中在层级 1 找到这个符号, 那么就会返回 1, 得到 @a_1
     Symbol() : type(Type::VAL), val(0) {}
     Symbol(Type type, int val) : type(type), val(val) {}
 };
@@ -88,12 +88,13 @@ public:
 class SymbolTable
 {
 private:
-    std::unordered_map<std::string, Symbol> symbol_table;
+    std::vector<std::unordered_map<std::string, Symbol>> symbol_table; // 每进入一个块, 就创建一个新的符号表, 块包括函数的大括号和语句块的大括号
     bool is_returned = false;
 
 public:
-    void create(const std::string &name, Symbol symbol);
-    bool exist(const std::string &name);
+    void new_symbol_table_hierarchy();
+    void delete_symbol_table_hierarchy();
+    void insert_symbol(const std::string &name, Symbol symbol);
     Symbol read(const std::string &name);
     void set_returned(bool is_returned);
     bool get_returned();

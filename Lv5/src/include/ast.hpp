@@ -133,8 +133,17 @@ public:
 class StmtAST : public BaseAST
 {
 public:
-    std::optional<std::unique_ptr<BaseAST>> lval; // 语句中的左值
-    std::unique_ptr<BaseAST> exp;                 // 语句中的表达式
+    enum class StmtType
+    {
+        Assign,
+        Expression,
+        Block,
+        Return
+    };
+    StmtType stmt_type;
+    std::optional<std::unique_ptr<BaseAST>> lval;  // 语句中的左值
+    std::optional<std::unique_ptr<BaseAST>> exp;   // 语句中的表达式
+    std::optional<std::unique_ptr<BaseAST>> block; // 语句其实是另一个用大括号包裹的语句块
 
     /**
      * @brief 打印抽象语法树。
