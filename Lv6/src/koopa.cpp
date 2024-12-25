@@ -23,6 +23,11 @@ Result FuncDefAST::print(std::stringstream &output_stream) const
     output_stream << " {" << std::endl;
     output_stream << "%entry:" << std::endl;
     Result result = block->print(output_stream);
+    // 如果 block 没有显式的 ret 指令, 则补上一个 ret 0
+    if (!result.control_flow_returned)
+    {
+        output_stream << "\tret 0" << std::endl;
+    }
     output_stream << "}" << std::endl;
     return result;
 }
@@ -53,7 +58,8 @@ Result BlockAST::print(std::stringstream &output_stream) const
         }
     }
     koopa_context_manager.delete_symbol_table_hierarchy();
-    return Result(); // 如果没有显式的 return 语句, 则返回 0
+    // 如果没有显式的 return 语句, 则返回 0 , 并且不设置 control_flow_returned 为 true, 以表示没有返回
+    return Result();
 }
 
 Result BlockItemAST::print(std::stringstream &output_stream) const
@@ -180,11 +186,9 @@ Result StmtAST::print(std::stringstream &output_stream) const
                 output_stream << "\tjump " << end_label << std::endl;
             }
         }
-        output_stream << end_label << ":" << std::endl;
-        koopa_context_manager.delete_symbol_table_hierarchy();
 
         // 如果 if 语句块和 else 语句块都返回了, 则注明整个 if ... else ... 语句块返回了
-        // 但是为了避免这样的空 %end , 额外补充一个空 ret 语句
+        // 但是为了避免这样的空 %end , 如果已经结束了就不输出 %end 了
         // fun @main(): i32 {
         // %entry:
         // 	br 0, %then_1, %else_1
@@ -195,11 +199,15 @@ Result StmtAST::print(std::stringstream &output_stream) const
         // %end_1:
         // }
         Result result = Result();
-        if (result_if.control_flow_returned && result_else.control_flow_returned)
+        if (!result_if.control_flow_returned || !result_else.control_flow_returned)
+        {
+            output_stream << end_label << ":" << std::endl;
+        }
+        else
         {
             result.control_flow_returned = true;
-            output_stream << "\tret\n";
         }
+        koopa_context_manager.delete_symbol_table_hierarchy();
         return result;
     }
     else

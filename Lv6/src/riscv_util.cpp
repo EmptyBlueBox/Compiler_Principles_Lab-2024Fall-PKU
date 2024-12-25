@@ -183,9 +183,18 @@ void RISCVPrinter::add(const std::string &rd, const std::string &rs1, const std:
     std::cout << "\tadd " << rd << ", " << rs1 << ", " << rs2 << std::endl;
 }
 
-void RISCVPrinter::addi(const std::string &rd, const std::string &rs1, const int &imm)
+void RISCVPrinter::addi(const std::string &rd, const std::string &rs1, const int &imm, RISCVContextManager &context_manager)
 {
-    std::cout << "\taddi " << rd << ", " << rs1 << ", " << imm << std::endl;
+    if (imm >= -2048 && imm < 2048)
+    {
+        std::cout << "\taddi " << rd << ", " << rs1 << ", " << imm << std::endl;
+    }
+    else
+    {
+        std::string reg = context_manager.new_temp_reg();
+        li(reg, imm);
+        std::cout << "\tadd " << rd << ", " << rs1 << ", " << reg << std::endl;
+    }
 }
 
 void RISCVPrinter::sub(const std::string &rd, const std::string &rs1, const std::string &rs2)
@@ -239,7 +248,8 @@ void RISCVPrinter::lw(const std::string &rd, const std::string &base, const int 
     {
         std::string reg = context_manager.new_temp_reg();
         li(reg, bias);
-        std::cout << "\tlw" << rd << ", " << reg << "(" << base << ")" << std::endl;
+        add(reg, reg, base);
+        std::cout << "\tlw " << rd << ", " << "(" << reg << ")" << std::endl;
     }
 }
 
@@ -254,20 +264,22 @@ void RISCVPrinter::sw(const std::string &rs1, const std::string &base, const int
     {
         std::string reg = context_manager.new_temp_reg();
         li(reg, bias);
-        std::cout << "\tsw" << rs1 << ", " << reg << "(" << base << ")" << std::endl;
+        add(reg, reg, base);
+        std::cout << "\tsw " << rs1 << ", " << "(" << reg << ")" << std::endl;
     }
 }
 
-void RISCVPrinter::add_sp(const int &bias, RISCVContextManager &context_manager)
+void RISCVPrinter::bnez(const std::string &cond, const std::string &label)
 {
-    if (bias >= -2048 && bias < 2048)
-    {
-        std::cout << "\taddi sp, sp, " << bias << std::endl;
-    }
-    else
-    {
-        std::string reg = context_manager.new_temp_reg();
-        li(reg, bias);
-        std::cout << "\tadd sp, sp, " << reg << std::endl;
-    }
+    std::cout << "\tbnez " << cond << ", " << label << std::endl;
+}
+
+void RISCVPrinter::beqz(const std::string &cond, const std::string &label)
+{
+    std::cout << "\tbeqz " << cond << ", " << label << std::endl;
+}
+
+void RISCVPrinter::jump(const std::string &label)
+{
+    std::cout << "\tj " << label << std::endl;
 }

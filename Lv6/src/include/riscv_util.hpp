@@ -162,13 +162,17 @@ class RISCVPrinter
 {
 public:
     void ret();
+
+    // 单目运算
     void seqz(const std::string &rd, const std::string &rs1);
     void snez(const std::string &rd, const std::string &rs1);
+
+    // 双目运算
     void or_(const std::string &rd, const std::string &rs1, const std::string &rs2);
     void and_(const std::string &rd, const std::string &rs1, const std::string &rs2);
     void xor_(const std::string &rd, const std::string &rs1, const std::string &rs2);
     void add(const std::string &rd, const std::string &rs1, const std::string &rs2);
-    void addi(const std::string &rd, const std::string &rs1, const int &imm);
+    void addi(const std::string &rd, const std::string &rs1, const int &imm, RISCVContextManager &context_manager);
     void sub(const std::string &rd, const std::string &rs1, const std::string &rs2);
     void mul(const std::string &rd, const std::string &rs1, const std::string &rs2);
     void div(const std::string &rd, const std::string &rs1, const std::string &rs2);
@@ -176,8 +180,14 @@ public:
     void sgt(const std::string &rd, const std::string &rs1, const std::string &rs2);
     void slt(const std::string &rd, const std::string &rs1, const std::string &rs2);
     void li(const std::string &rd, const int &imm);
+
+    // 访存
     void mv(const std::string &rd, const std::string &rs1);
     void lw(const std::string &rd, const std::string &base, const int &bias, RISCVContextManager &context_manager);
     void sw(const std::string &rs1, const std::string &base, const int &bias, RISCVContextManager &context_manager);
-    void add_sp(const int &bias, RISCVContextManager &context_manager);
+
+    // 分支
+    void bnez(const std::string &cond, const std::string &label);
+    void beqz(const std::string &cond, const std::string &label);
+    void jump(const std::string &label);
 };

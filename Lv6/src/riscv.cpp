@@ -106,7 +106,7 @@ void visit(const koopa_raw_function_t &func)
     riscv_context_manager.init_stack_manager_for_one_function(function_name, num_stack_frame_byte);
 
     // 继续输出 RISC-V 的 prologue
-    riscv_printer.addi("sp", "sp", -num_stack_frame_byte);
+    riscv_printer.addi("sp", "sp", -num_stack_frame_byte, riscv_context_manager);
 
     // 访问所有基本块
     visit(func->bbs);
@@ -115,6 +115,8 @@ void visit(const koopa_raw_function_t &func)
 // 访问基本块
 void visit(const koopa_raw_basic_block_t &bb)
 {
+    // 输出基本块名
+    std::cout << bb->name + 1 << ":" << std::endl;
     // 访问所有指令
     visit(bb->insts);
 }
@@ -150,10 +152,49 @@ void visit(const koopa_raw_value_t &value)
         // 访问 store 指令
         visit(kind.data.store, value);
         break;
+    case KOOPA_RVT_BRANCH:
+        // 访问 branch 指令
+        visit(kind.data.branch, value);
+        break;
+    case KOOPA_RVT_JUMP:
+        // 访问 jump 指令
+        visit(kind.data.jump);
+        break;
     default:
         // 其他类型暂时遇不到
         throw std::runtime_error("visit: invalid instruction");
     }
+}
+
+// 访问 branch 指令, 这个指令的输入是立即数或内存, 所以需要判断 branch.cond->kind.tag
+void visit(const koopa_raw_branch_t &branch, const koopa_raw_value_t &value)
+{
+    // 当前函数的 StackManager
+    StackManager &stack_manager = riscv_context_manager.get_current_function_stack_manager();
+    // 给中间结果分配一个寄存器
+    riscv_context_manager.allocate_reg(value);
+    std::string temp_reg_name = riscv_context_manager.value_to_reg_string(value);
+    // 使用立即数或从栈中加载数据到寄存器
+    if (branch.cond->kind.tag == KOOPA_RVT_INTEGER)
+    {
+        riscv_printer.li(temp_reg_name, branch.cond->kind.data.integer.value);
+    }
+    else
+    {
+        riscv_printer.lw(temp_reg_name, "sp", stack_manager.get_value_stack_offset(branch.cond), riscv_context_manager);
+    }
+    // 访问 branch 指令
+    riscv_printer.bnez(temp_reg_name, branch.true_bb->name + 1);
+    riscv_printer.jump(branch.false_bb->name + 1);
+    // 当前操作数所在的寄存器已经被使用过了, 释放
+    riscv_context_manager.set_reg_free(value);
+}
+
+// 访问 jump 指令
+void visit(const koopa_raw_jump_t &jump)
+{
+    // 访问 jump 指令
+    riscv_printer.jump(jump.target->name + 1);
 }
 
 // 访问 load 指令, load 的输入和输出都必然是内存
@@ -166,7 +207,7 @@ void visit(const koopa_raw_load_t &load, const koopa_raw_value_t &value)
     std::string temp_reg_name = riscv_context_manager.value_to_reg_string(value);
     // 从栈中加载数据到寄存器
     riscv_printer.lw(temp_reg_name, "sp", stack_manager.get_value_stack_offset(load.src), riscv_context_manager);
-    // 将数据保存到栈中, 更新栈帧使用情况, 同时输出 sw 指令
+    // 将数据保存到栈中, 同时输出 sw 指令
     stack_manager.save_value_to_stack(value);
     riscv_printer.sw(temp_reg_name, "sp", stack_manager.get_value_stack_offset(value), riscv_context_manager);
     // 当前操作数所在的寄存器已经被使用过了, 释放
@@ -224,7 +265,7 @@ void visit(const koopa_raw_return_t &ret)
     }
     // 恢复栈帧
     StackManager &stack_manager = riscv_context_manager.get_current_function_stack_manager();
-    riscv_printer.addi("sp", "sp", stack_manager.get_num_stack_frame_byte());
+    riscv_printer.addi("sp", "sp", stack_manager.get_num_stack_frame_byte(), riscv_context_manager);
     // 返回
     riscv_printer.ret();
 }

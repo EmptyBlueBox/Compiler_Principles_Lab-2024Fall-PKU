@@ -98,3 +98,20 @@ void visit(const koopa_raw_return_t &ret);
  * @date 2024-11-13
  */
 void visit(const koopa_raw_binary_t &binary, const koopa_raw_value_t &value);
+
+/**
+ * @brief 访问 RISC-V 汇编代码的一个分支指令
+ * @param[in] branch 内存中的 RISC-V 汇编代码分支指令
+ * @param[in] value 这个分支指令本身的 value, 这是一个 **指针**
+ * @author Yutong Liang
+ * @date 2024-12-25
+ */
+void visit(const koopa_raw_branch_t &branch, const koopa_raw_value_t &value);
+
+/**
+ * @brief 访问 RISC-V 汇编代码的一个跳转指令
+ * @param[in] jump 内存中的 RISC-V 汇编代码跳转指令
+ * @author Yutong Liang
+ * @date 2024-12-25
+ */
+void visit(const koopa_raw_jump_t &jump);

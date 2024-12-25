@@ -109,12 +109,24 @@ private:
     std::map<std::pair<std::string, int>, bool> _is_symbol_allocated_in_this_level;
 
 public:
+    // 当前的 if ... else ... 语句数量, 遇见一个加一, 离开一个 **不** 减一
     int total_if_else_statement_count = 0;
 
+    // 每进入一个大括号 (或者 if ... else ... 语句) 就创建一个新的符号表
     void new_symbol_table_hierarchy();
+
+    // 离开大括号 (或者 if ... else ... 语句) 就删除一个符号表
     void delete_symbol_table_hierarchy();
+
+    // 符号表操作, 在当前符号表中插入一个符号对应的字符串 (不包含后缀) 和 Symbol 对象 (立即数还是变量的层级)
     void insert_symbol(const std::string &name, Symbol symbol);
+
+    // 在当前符号表中查找一个符号对应的 Symbol 对象, 从最内层的符号表开始查找, 逐渐向外层查找
     Symbol name_to_symbol(const std::string &name);
+
+    // 设置一个符号在当前层级的符号表中被分配
     void set_symbol_allocated_in_this_level(const std::string &name);
+
+    // 判断一个符号在当前层级的符号表中是否被分配
     bool is_symbol_allocated_in_this_level(const std::string &name);
 };
