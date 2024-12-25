@@ -2,4 +2,4 @@
 
 Peking University 2024 Fall Semester "Principles of Compiler" Course Labs
 
-[Lab Blog in Chinese](https://www.lyt0112.com/blog/compiler_principles_lab_note-zh)
+Welcome to my [Course Review](https://www.lyt0112.com/blog/course_review-zh) !
