@@ -239,7 +239,8 @@ void RISCVPrinter::lw(const std::string &rd, const std::string &base, const int 
     {
         std::string reg = context_manager.new_temp_reg();
         li(reg, bias);
-        std::cout << "\tlw" << rd << ", " << reg << "(" << base << ")" << std::endl;
+        add(reg, reg, base);
+        std::cout << "\tlw " << rd << ", " << "(" << reg << ")" << std::endl;
     }
 }
 
@@ -254,7 +255,8 @@ void RISCVPrinter::sw(const std::string &rs1, const std::string &base, const int
     {
         std::string reg = context_manager.new_temp_reg();
         li(reg, bias);
-        std::cout << "\tsw" << rs1 << ", " << reg << "(" << base << ")" << std::endl;
+        add(reg, reg, base);
+        std::cout << "\tsw " << rs1 << ", " << "(" << reg << ")" << std::endl;
     }
 }
 
