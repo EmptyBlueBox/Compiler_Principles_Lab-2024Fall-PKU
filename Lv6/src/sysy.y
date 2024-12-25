@@ -1,7 +1,7 @@
 %code requires {
   #include <memory>
   #include <string>
-  #include "include/ast.hpp"
+  #include "include/koopa.hpp"
 }
 
 %{
@@ -10,7 +10,7 @@
 #include <memory>
 #include <string>
 #include <deque>
-#include "include/ast.hpp"
+#include "include/koopa.hpp"
 
 // declare lexer function and error handling function
 int yylex();
@@ -31,13 +31,13 @@ using namespace std;
 
 
 // lexer 返回的所有 token 种类的声明, 终结符的类型为 str_val 和 int_val
-%token INT RETURN CONST
+%token INT RETURN CONST IF ELSE
 %token <str_val> IDENT
 %token <int_val> INT_CONST
 %token <str_val> EXCLUSIVE_UNARY_OP MUL_OP ADD_OP REL_OP EQ_OP AND_OP OR_OP // Operators
 
 // 非终结符的类型定义
-%type <ast_val> FuncDef FuncType Block BlockItem Stmt // Program Unit
+%type <ast_val> FuncDef FuncType Block BlockItem Stmt StmtWithElse// Program Unit
 %type <ast_val> Decl BType ConstDecl ConstDef ConstInitVal VarDecl VarDef InitVal // Declaration
 %type <ast_val> Exp ConstExp LVal UnaryExp PrimaryExp MulExp AddExp LOrExp LAndExp RelExp EqExp // Expression
 %type <int_val> Number
@@ -149,6 +149,67 @@ Stmt
   | RETURN ';' {
     auto ast = new StmtAST();
     ast->stmt_type = StmtAST::StmtType::Return;
+    $$ = ast;
+  }
+  | IF '(' Exp ')' Stmt {
+    auto ast = new StmtAST();
+    ast->stmt_type = StmtAST::StmtType::If;
+    ast->exp = unique_ptr<BaseAST>($3);
+    ast->inside_if_stmt = unique_ptr<BaseAST>($5);
+    $$ = ast;
+  }
+  | IF '(' Exp ')' StmtWithElse ELSE Stmt {
+    auto ast = new StmtAST();
+    ast->stmt_type = StmtAST::StmtType::If;
+    ast->exp = unique_ptr<BaseAST>($3);
+    ast->inside_if_stmt = unique_ptr<BaseAST>($5);
+    ast->inside_else_stmt = unique_ptr<BaseAST>($7);
+    $$ = ast;
+  }
+  ;
+
+StmtWithElse
+  : LVal '=' Exp ';' {
+    auto ast = new StmtAST();
+    ast->stmt_type = StmtAST::StmtType::Assign;
+    ast->lval = unique_ptr<BaseAST>($1);
+    ast->exp = unique_ptr<BaseAST>($3);
+    $$ = ast;
+  }
+  | Exp ';' {
+    auto ast = new StmtAST();
+    ast->stmt_type = StmtAST::StmtType::Expression;
+    ast->exp = unique_ptr<BaseAST>($1);
+    $$ = ast;
+  }
+  | ';' {
+    auto ast = new StmtAST();
+    ast->stmt_type = StmtAST::StmtType::Expression;
+    $$ = ast;
+  }
+  | Block {
+    auto ast = new StmtAST();
+    ast->stmt_type = StmtAST::StmtType::Block;
+    ast->block = unique_ptr<BaseAST>($1);
+    $$ = ast;
+  }
+  | RETURN Exp ';' {
+    auto ast = new StmtAST();
+    ast->stmt_type = StmtAST::StmtType::Return;
+    ast->exp = unique_ptr<BaseAST>($2);
+    $$ = ast;
+  }
+  | RETURN ';' {
+    auto ast = new StmtAST();
+    ast->stmt_type = StmtAST::StmtType::Return;
+    $$ = ast;
+  }
+  | IF '(' Exp ')' StmtWithElse ELSE StmtWithElse {
+    auto ast = new StmtAST();
+    ast->stmt_type = StmtAST::StmtType::If;
+    ast->exp = unique_ptr<BaseAST>($3);
+    ast->inside_if_stmt = unique_ptr<BaseAST>($5);
+    ast->inside_else_stmt = unique_ptr<BaseAST>($7);
     $$ = ast;
   }
   ;

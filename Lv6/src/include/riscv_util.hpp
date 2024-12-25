@@ -48,7 +48,7 @@ public:
  * @author Yutong Liang
  * @date 2024-11-28
  */
-class ContextManager
+class RISCVContextManager
 {
 private:
     // 值到寄存器名称的映射
@@ -78,7 +78,7 @@ public:
      * @author Yutong Liang
      * @date 2024-11-29
      */
-    ContextManager()
+    RISCVContextManager()
     {
         // 初始化所有寄存器为未占用
         for (int i = 0; i <= 6; ++i)
@@ -177,7 +177,7 @@ public:
     void slt(const std::string &rd, const std::string &rs1, const std::string &rs2);
     void li(const std::string &rd, const int &imm);
     void mv(const std::string &rd, const std::string &rs1);
-    void lw(const std::string &rd, const std::string &base, const int &bias, ContextManager &context_manager);
-    void sw(const std::string &rs1, const std::string &base, const int &bias, ContextManager &context_manager);
-    void add_sp(const int &bias, ContextManager &context_manager);
+    void lw(const std::string &rd, const std::string &base, const int &bias, RISCVContextManager &context_manager);
+    void sw(const std::string &rs1, const std::string &base, const int &bias, RISCVContextManager &context_manager);
+    void add_sp(const int &bias, RISCVContextManager &context_manager);
 };

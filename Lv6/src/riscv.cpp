@@ -1,8 +1,7 @@
-#include "include/backend.hpp"
-#include "include/util_riscv.hpp"
+#include "include/riscv.hpp"
 
 // 所有代码共用的寄存器和栈管理器
-ContextManager context_manager;
+RISCVContextManager riscv_context_manager;
 
 // 所有代码共用的 RISC-V 汇编打印器
 RISCVPrinter riscv_printer;
@@ -104,7 +103,7 @@ void visit(const koopa_raw_function_t &func)
     num_stack_frame_byte = (num_stack_frame_byte + 15) / 16 * 16; // 对齐到 16 的倍数
 
     // 初始化栈管理器
-    context_manager.init_stack_manager_for_one_function(function_name, num_stack_frame_byte);
+    riscv_context_manager.init_stack_manager_for_one_function(function_name, num_stack_frame_byte);
 
     // 继续输出 RISC-V 的 prologue
     riscv_printer.addi("sp", "sp", -num_stack_frame_byte);
@@ -161,27 +160,27 @@ void visit(const koopa_raw_value_t &value)
 void visit(const koopa_raw_load_t &load, const koopa_raw_value_t &value)
 {
     // 当前函数的 StackManager
-    StackManager &stack_manager = context_manager.get_current_function_stack_manager();
+    StackManager &stack_manager = riscv_context_manager.get_current_function_stack_manager();
     // 给中间结果分配一个寄存器, 这个寄存器对应 value, 为什么不用临时寄存器? 因为 lw 和 sw 也可能使用寄存器, 可能造成冲突
-    context_manager.allocate_reg(value);
-    std::string temp_reg_name = context_manager.value_to_reg_string(value);
+    riscv_context_manager.allocate_reg(value);
+    std::string temp_reg_name = riscv_context_manager.value_to_reg_string(value);
     // 从栈中加载数据到寄存器
-    riscv_printer.lw(temp_reg_name, "sp", stack_manager.get_value_stack_offset(load.src), context_manager);
+    riscv_printer.lw(temp_reg_name, "sp", stack_manager.get_value_stack_offset(load.src), riscv_context_manager);
     // 将数据保存到栈中, 更新栈帧使用情况, 同时输出 sw 指令
     stack_manager.save_value_to_stack(value);
-    riscv_printer.sw(temp_reg_name, "sp", stack_manager.get_value_stack_offset(value), context_manager);
+    riscv_printer.sw(temp_reg_name, "sp", stack_manager.get_value_stack_offset(value), riscv_context_manager);
     // 当前操作数所在的寄存器已经被使用过了, 释放
-    context_manager.set_reg_free(value);
+    riscv_context_manager.set_reg_free(value);
 }
 
 // 访问 store 指令, store 的输出必然是内存, 但是输入可能是内存或者立即数
 void visit(const koopa_raw_store_t &store, const koopa_raw_value_t &value)
 {
     // 当前函数的 StackManager
-    StackManager &stack_manager = context_manager.get_current_function_stack_manager();
+    StackManager &stack_manager = riscv_context_manager.get_current_function_stack_manager();
     // 给中间结果分配一个寄存器, 这个寄存器对应 value
-    context_manager.allocate_reg(value);
-    std::string temp_reg_name = context_manager.value_to_reg_string(value);
+    riscv_context_manager.allocate_reg(value);
+    std::string temp_reg_name = riscv_context_manager.value_to_reg_string(value);
     // 判断 store.value 是否是立即数, 如果是立即数, 则需要先分配一个临时寄存器, 如果是内存, 则从内存中 lw 出来
     if (store.value->kind.tag == KOOPA_RVT_INTEGER)
     {
@@ -189,13 +188,13 @@ void visit(const koopa_raw_store_t &store, const koopa_raw_value_t &value)
     }
     else
     {
-        riscv_printer.lw(temp_reg_name, "sp", stack_manager.get_value_stack_offset(store.value), context_manager);
+        riscv_printer.lw(temp_reg_name, "sp", stack_manager.get_value_stack_offset(store.value), riscv_context_manager);
     }
     // 保存 store.dest 到栈中
     stack_manager.save_value_to_stack(store.dest);
-    riscv_printer.sw(temp_reg_name, "sp", stack_manager.get_value_stack_offset(store.dest), context_manager);
+    riscv_printer.sw(temp_reg_name, "sp", stack_manager.get_value_stack_offset(store.dest), riscv_context_manager);
     // 当前操作数所在的寄存器已经被使用过了, 释放
-    context_manager.set_reg_free(value);
+    riscv_context_manager.set_reg_free(value);
 }
 
 // 访问 return 指令
@@ -213,9 +212,9 @@ void visit(const koopa_raw_return_t &ret)
         else
         {
             // 当前函数的 StackManager
-            StackManager &stack_manager = context_manager.get_current_function_stack_manager();
+            StackManager &stack_manager = riscv_context_manager.get_current_function_stack_manager();
             // 将 ret.value 的值从栈中加载到 a0 寄存器
-            riscv_printer.lw("a0", "sp", stack_manager.get_value_stack_offset(ret.value), context_manager);
+            riscv_printer.lw("a0", "sp", stack_manager.get_value_stack_offset(ret.value), riscv_context_manager);
         }
     }
     // 如果 ret 的 value 为空, 则直接赋值 0 给 a0 寄存器, 然后返回
@@ -224,7 +223,7 @@ void visit(const koopa_raw_return_t &ret)
         riscv_printer.li("a0", 0);
     }
     // 恢复栈帧
-    StackManager &stack_manager = context_manager.get_current_function_stack_manager();
+    StackManager &stack_manager = riscv_context_manager.get_current_function_stack_manager();
     riscv_printer.addi("sp", "sp", stack_manager.get_num_stack_frame_byte());
     // 返回
     riscv_printer.ret();
@@ -234,8 +233,8 @@ void visit(const koopa_raw_return_t &ret)
 void visit(const koopa_raw_binary_t &binary, const koopa_raw_value_t &value)
 {
     // 判断 lhs 是立即数还是内存, 如果是立即数就 li, 否则就 lw
-    context_manager.allocate_reg(binary.lhs);
-    std::string lhs = context_manager.value_to_reg_string(binary.lhs);
+    riscv_context_manager.allocate_reg(binary.lhs);
+    std::string lhs = riscv_context_manager.value_to_reg_string(binary.lhs);
     if (binary.lhs->kind.tag == KOOPA_RVT_INTEGER)
     {
         riscv_printer.li(lhs, binary.lhs->kind.data.integer.value);
@@ -243,13 +242,13 @@ void visit(const koopa_raw_binary_t &binary, const koopa_raw_value_t &value)
     else
     {
         // 当前函数的 StackManager
-        StackManager &stack_manager = context_manager.get_current_function_stack_manager();
+        StackManager &stack_manager = riscv_context_manager.get_current_function_stack_manager();
         // 从栈中加载数据到寄存器
-        riscv_printer.lw(lhs, "sp", stack_manager.get_value_stack_offset(binary.lhs), context_manager);
+        riscv_printer.lw(lhs, "sp", stack_manager.get_value_stack_offset(binary.lhs), riscv_context_manager);
     }
     // 判断 rhs 是立即数还是内存, 如果是立即数就 li, 否则就 lw
-    context_manager.allocate_reg(binary.rhs);
-    std::string rhs = context_manager.value_to_reg_string(binary.rhs);
+    riscv_context_manager.allocate_reg(binary.rhs);
+    std::string rhs = riscv_context_manager.value_to_reg_string(binary.rhs);
     if (binary.rhs->kind.tag == KOOPA_RVT_INTEGER)
     {
         riscv_printer.li(rhs, binary.rhs->kind.data.integer.value);
@@ -257,16 +256,16 @@ void visit(const koopa_raw_binary_t &binary, const koopa_raw_value_t &value)
     else
     {
         // 当前函数的 StackManager
-        StackManager &stack_manager = context_manager.get_current_function_stack_manager();
+        StackManager &stack_manager = riscv_context_manager.get_current_function_stack_manager();
         // 从栈中加载数据到寄存器
-        riscv_printer.lw(rhs, "sp", stack_manager.get_value_stack_offset(binary.rhs), context_manager);
+        riscv_printer.lw(rhs, "sp", stack_manager.get_value_stack_offset(binary.rhs), riscv_context_manager);
     }
 
     // 给结果分配一个寄存器, 分配之前可以先释放掉 lhs 和 rhs 对应的寄存器, 因为他们相当于已经加载进来了, 一会使用的时候可以覆盖, 比如 add t0, t0, t1
-    context_manager.set_reg_free(binary.lhs);
-    context_manager.set_reg_free(binary.rhs);
-    context_manager.allocate_reg(value);
-    std::string cur = context_manager.value_to_reg_string(value);
+    riscv_context_manager.set_reg_free(binary.lhs);
+    riscv_context_manager.set_reg_free(binary.rhs);
+    riscv_context_manager.allocate_reg(value);
+    std::string cur = riscv_context_manager.value_to_reg_string(value);
 
     // 根据二元运算符的类型进行处理
     switch (binary.op)
@@ -318,10 +317,10 @@ void visit(const koopa_raw_binary_t &binary, const koopa_raw_value_t &value)
         throw std::runtime_error("visit: invalid binary operator");
     }
     // 当前函数的 StackManager
-    StackManager &stack_manager = context_manager.get_current_function_stack_manager();
+    StackManager &stack_manager = riscv_context_manager.get_current_function_stack_manager();
     // 把结果存回栈中
     stack_manager.save_value_to_stack(value);
-    riscv_printer.sw(cur, "sp", stack_manager.get_value_stack_offset(value), context_manager);
+    riscv_printer.sw(cur, "sp", stack_manager.get_value_stack_offset(value), riscv_context_manager);
     // 当前结果所在的寄存器已经被使用过了, 释放
-    context_manager.set_reg_free(value);
+    riscv_context_manager.set_reg_free(value);
 }

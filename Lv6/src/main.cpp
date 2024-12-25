@@ -4,8 +4,8 @@
 #include <memory>
 #include <string>
 
-#include "include/ast.hpp"
-#include "include/backend.hpp"
+#include "include/koopa.hpp"
+#include "include/riscv.hpp"
 
 using namespace std;
 

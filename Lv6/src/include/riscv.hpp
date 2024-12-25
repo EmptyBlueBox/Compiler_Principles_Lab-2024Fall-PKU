@@ -12,6 +12,7 @@
 #include <iostream>
 
 #include "koopa.h"
+#include "riscv_util.hpp"
 
 /**
  * @brief 后端函数, 使用 koopa.h 将 Koopa IR 转换为内存中的 RISC-V 汇编代码, 然后 DFS 遍历 RISC-V 汇编代码, 将其输出到内存中

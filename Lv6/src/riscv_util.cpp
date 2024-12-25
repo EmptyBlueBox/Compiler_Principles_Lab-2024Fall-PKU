@@ -1,6 +1,6 @@
 #include <iostream>
 
-#include "include/util_riscv.hpp"
+#include "include/riscv_util.hpp"
 
 void StackManager::save_value_to_stack(const koopa_raw_value_t &value)
 {
@@ -39,7 +39,7 @@ int StackManager::get_value_stack_offset(const koopa_raw_value_t &value)
     return value_to_stack_offset[value];
 }
 
-void ContextManager::set_reg_free(const koopa_raw_value_t &value)
+void RISCVContextManager::set_reg_free(const koopa_raw_value_t &value)
 {
     if (_value_to_reg_string.find(value) == _value_to_reg_string.end())
     {
@@ -49,12 +49,12 @@ void ContextManager::set_reg_free(const koopa_raw_value_t &value)
     _value_to_reg_string.erase(value);
 }
 
-bool ContextManager::exist(const koopa_raw_value_t &value)
+bool RISCVContextManager::exist(const koopa_raw_value_t &value)
 {
     return _value_to_reg_string.find(value) != _value_to_reg_string.end();
 }
 
-void ContextManager::allocate_reg(const koopa_raw_value_t &value, bool is_zero)
+void RISCVContextManager::allocate_reg(const koopa_raw_value_t &value, bool is_zero)
 {
     if ((_value_to_reg_string.find(value) != _value_to_reg_string.end()) && _reg_is_used[value_to_reg_string(value)] == true)
     {
@@ -89,7 +89,7 @@ void ContextManager::allocate_reg(const koopa_raw_value_t &value, bool is_zero)
     }
 }
 
-std::string ContextManager::new_temp_reg()
+std::string RISCVContextManager::new_temp_reg()
 {
     // 选择一个未被占用的寄存器
     for (int i = 0; i <= 6; ++i)
@@ -111,7 +111,7 @@ std::string ContextManager::new_temp_reg()
     throw std::runtime_error("new_temp_reg: no free register found");
 }
 
-std::string ContextManager::value_to_reg_string(const koopa_raw_value_t &value)
+std::string RISCVContextManager::value_to_reg_string(const koopa_raw_value_t &value)
 {
     if (_value_to_reg_string.find(value) == _value_to_reg_string.end())
     {
@@ -120,7 +120,7 @@ std::string ContextManager::value_to_reg_string(const koopa_raw_value_t &value)
     return _value_to_reg_string[value];
 }
 
-void ContextManager::_set_value_to_reg_string(const koopa_raw_value_t &value, const std::string &reg_string)
+void RISCVContextManager::_set_value_to_reg_string(const koopa_raw_value_t &value, const std::string &reg_string)
 {
     if (_value_to_reg_string.find(value) != _value_to_reg_string.end())
     {
@@ -129,7 +129,7 @@ void ContextManager::_set_value_to_reg_string(const koopa_raw_value_t &value, co
     _value_to_reg_string[value] = reg_string;
 }
 
-StackManager &ContextManager::get_current_function_stack_manager()
+StackManager &RISCVContextManager::get_current_function_stack_manager()
 {
     if (_function_name_to_stack_manager.find(current_function_name) == _function_name_to_stack_manager.end())
     {
@@ -138,7 +138,7 @@ StackManager &ContextManager::get_current_function_stack_manager()
     return _function_name_to_stack_manager[current_function_name];
 }
 
-void ContextManager::init_stack_manager_for_one_function(const std::string &function_name, int stack_size)
+void RISCVContextManager::init_stack_manager_for_one_function(const std::string &function_name, int stack_size)
 {
     if (_function_name_to_stack_manager.find(function_name) != _function_name_to_stack_manager.end())
     {
@@ -228,7 +228,7 @@ void RISCVPrinter::mv(const std::string &rd, const std::string &rs1)
     std::cout << "\tmv " << rd << ", " << rs1 << std::endl;
 }
 
-void RISCVPrinter::lw(const std::string &rd, const std::string &base, const int &bias, ContextManager &context_manager)
+void RISCVPrinter::lw(const std::string &rd, const std::string &base, const int &bias, RISCVContextManager &context_manager)
 {
     // 检查偏移量是否在 12 位立即数范围内
     if (bias >= -2048 && bias < 2048)
@@ -243,7 +243,7 @@ void RISCVPrinter::lw(const std::string &rd, const std::string &base, const int 
     }
 }
 
-void RISCVPrinter::sw(const std::string &rs1, const std::string &base, const int &bias, ContextManager &context_manager)
+void RISCVPrinter::sw(const std::string &rs1, const std::string &base, const int &bias, RISCVContextManager &context_manager)
 {
     // 检查偏移量是否在 12 位立即数范围内
     if (bias >= -2048 && bias < 2048)
@@ -258,7 +258,7 @@ void RISCVPrinter::sw(const std::string &rs1, const std::string &base, const int
     }
 }
 
-void RISCVPrinter::add_sp(const int &bias, ContextManager &context_manager)
+void RISCVPrinter::add_sp(const int &bias, RISCVContextManager &context_manager)
 {
     if (bias >= -2048 && bias < 2048)
     {

@@ -1,10 +1,10 @@
-#include "include/ast.hpp"
+#include "include/koopa.hpp"
 
 // 定义并初始化, 应该在 CPP 文件中否则会造成重复定义的链接器问题, 最开始计算的数据没有存储在任何寄存器中, 所以初始化为 -1
 int Result::current_symbol_index = -1;
 
 // 全局符号表
-SymbolTable symbol_table;
+KoopaContextManager koopa_context_manager;
 
 //////////////////////////////////////////
 // Program Unit
@@ -42,16 +42,18 @@ Result FuncTypeAST::print(std::stringstream &output_stream) const
 
 Result BlockAST::print(std::stringstream &output_stream) const
 {
-    symbol_table.new_symbol_table_hierarchy();
+    koopa_context_manager.new_symbol_table_hierarchy();
     for (const auto &item : block_items)
     {
-        if (!symbol_table.get_returned())
+        Result result = item->print(output_stream);
+        if (result.control_flow_returned)
         {
-            item->print(output_stream);
+            koopa_context_manager.delete_symbol_table_hierarchy();
+            return result;
         }
     }
-    symbol_table.delete_symbol_table_hierarchy();
-    return Result();
+    koopa_context_manager.delete_symbol_table_hierarchy();
+    return Result(); // 如果没有显式的 return 语句, 则返回 0
 }
 
 Result BlockItemAST::print(std::stringstream &output_stream) const
@@ -79,7 +81,7 @@ Result StmtAST::print(std::stringstream &output_stream) const
             // 这里不能调用 lval->print , 因为这里的 lval 不应该作为一个引用 (左值) 出现, 这里需要一个字符串来判断符号是否已经存在
             std::string symbol_name = ((LValAST *)(*lval).get())->left_value_symbol;
             Result result = (*exp)->print(output_stream);
-            Symbol symbol = symbol_table.read(symbol_name);
+            Symbol symbol = koopa_context_manager.name_to_symbol(symbol_name);
             if (symbol.type == Symbol::Type::VAL)
             {
                 throw std::runtime_error("StmtAST::print: assign to a constant");
@@ -100,14 +102,15 @@ Result StmtAST::print(std::stringstream &output_stream) const
         {
             Result result = (*exp)->print(output_stream);
             output_stream << "\tret " << result << "\n";
-            symbol_table.set_returned(true);
-            return Result();
+            result.control_flow_returned = true;
+            return result;
         }
         else if (!lval && !exp && !block)
         {
             output_stream << "\tret\n";
-            symbol_table.set_returned(true);
-            return Result();
+            Result result = Result();
+            result.control_flow_returned = true;
+            return result;
         }
         else
         {
@@ -134,13 +137,70 @@ Result StmtAST::print(std::stringstream &output_stream) const
     {
         if (!lval && !exp && block)
         {
-            (*block)->print(output_stream);
-            return Result(); // 语句块不会返回任何值
+            Result result = (*block)->print(output_stream);
+            return result;
         }
         else
         {
             throw std::runtime_error("StmtAST::print: invalid block statement");
         }
+    }
+    else if (stmt_type == StmtType::If)
+    {
+        koopa_context_manager.new_symbol_table_hierarchy();
+        koopa_context_manager.total_if_else_statement_count++;
+        std::string then_label = "%then_" + std::to_string(koopa_context_manager.total_if_else_statement_count);
+        std::string else_label = "%else_" + std::to_string(koopa_context_manager.total_if_else_statement_count);
+        std::string end_label = "%end_" + std::to_string(koopa_context_manager.total_if_else_statement_count);
+
+        Result exp_result = (*exp)->print(output_stream);
+        if (!inside_if_stmt && !inside_else_stmt)
+        {
+            throw std::runtime_error("StmtAST::print: invalid if statement, there's no if");
+        }
+
+        output_stream << "\tbr " << exp_result << ", " << then_label << ", " << (inside_else_stmt ? else_label : end_label) << std::endl;
+
+        // if 语句块
+        output_stream << then_label << ":" << std::endl;
+        Result result_if = (*inside_if_stmt)->print(output_stream);
+        if (!result_if.control_flow_returned)
+        {
+            output_stream << "\tjump " << end_label << std::endl;
+        }
+
+        // else 语句块
+        Result result_else = Result();
+        if (inside_else_stmt)
+        {
+            output_stream << else_label << ":" << std::endl;
+            result_else = (*inside_else_stmt)->print(output_stream);
+            if (!result_else.control_flow_returned)
+            {
+                output_stream << "\tjump " << end_label << std::endl;
+            }
+        }
+        output_stream << end_label << ":" << std::endl;
+        koopa_context_manager.delete_symbol_table_hierarchy();
+
+        // 如果 if 语句块和 else 语句块都返回了, 则注明整个 if ... else ... 语句块返回了
+        // 但是为了避免这样的空 %end , 额外补充一个空 ret 语句
+        // fun @main(): i32 {
+        // %entry:
+        // 	br 0, %then_1, %else_1
+        // %then_1:
+        // 	ret 1
+        // %else_1:
+        // 	ret 2
+        // %end_1:
+        // }
+        Result result = Result();
+        if (result_if.control_flow_returned && result_else.control_flow_returned)
+        {
+            result.control_flow_returned = true;
+            output_stream << "\tret\n";
+        }
+        return result;
     }
     else
     {
@@ -187,7 +247,7 @@ Result ConstDeclAST::print(std::stringstream &output_stream) const
 Result ConstDefAST::print(std::stringstream &output_stream) const
 {
     Result value_result = const_init_val->print(output_stream);
-    symbol_table.insert_symbol(const_symbol, Symbol(Symbol::Type::VAL, value_result.val));
+    koopa_context_manager.insert_symbol(const_symbol, Symbol(Symbol::Type::VAL, value_result.val));
     return Result();
 }
 
@@ -210,20 +270,28 @@ Result VarDefAST::print(std::stringstream &output_stream) const
     if (var_init_val)
     {
         Result value_result = (*var_init_val)->print(output_stream);
-        symbol_table.insert_symbol(var_symbol, Symbol(Symbol::Type::VAR, value_result.val));
+        koopa_context_manager.insert_symbol(var_symbol, Symbol(Symbol::Type::VAR, value_result.val));
         std::string symbol_name = var_symbol;
-        std::string suffix = std::to_string(symbol_table.read(symbol_name).val);
+        std::string suffix = std::to_string(koopa_context_manager.name_to_symbol(symbol_name).val);
         std::string symbol_name_with_suffix = symbol_name + "_" + suffix;
-        output_stream << "\t@" << symbol_name_with_suffix << " = alloc i32\n"; // TODO: 这里需要根据类型分配空间, 但是类型保存在上一层 VarDeclAST 中的 btype 中, 访问不到, 但是暂时只需要处理 int 类型, 所以 hard code 即可
+        if (!koopa_context_manager.is_symbol_allocated_in_this_level(symbol_name))
+        {
+            output_stream << "\t@" << symbol_name_with_suffix << " = alloc i32\n"; // TODO: 这里需要根据类型分配空间, 但是类型保存在上一层 VarDeclAST 中的 btype 中, 访问不到, 但是暂时只需要处理 int 类型, 所以 hard code 即可
+        }
+        koopa_context_manager.set_symbol_allocated_in_this_level(symbol_name);
         output_stream << "\tstore " << value_result << ", @" << symbol_name_with_suffix << "\n";
     }
     else
     {
-        symbol_table.insert_symbol(var_symbol, Symbol(Symbol::Type::VAR, 0));
+        koopa_context_manager.insert_symbol(var_symbol, Symbol(Symbol::Type::VAR, 0));
         std::string symbol_name = var_symbol;
-        std::string suffix = std::to_string(symbol_table.read(symbol_name).val);
+        std::string suffix = std::to_string(koopa_context_manager.name_to_symbol(symbol_name).val);
         std::string symbol_name_with_suffix = symbol_name + "_" + suffix;
-        output_stream << "\t@" << symbol_name_with_suffix << " = alloc i32\n"; // TODO: 这里需要根据类型分配空间, 但是类型保存在上一层 VarDeclAST 中的 btype 中, 访问不到, 但是暂时只需要处理 int 类型, 所以 hard code 即可
+        if (!koopa_context_manager.is_symbol_allocated_in_this_level(symbol_name))
+        {
+            output_stream << "\t@" << symbol_name_with_suffix << " = alloc i32\n"; // TODO: 这里需要根据类型分配空间, 但是类型保存在上一层 VarDeclAST 中的 btype 中, 访问不到, 但是暂时只需要处理 int 类型, 所以 hard code 即可
+        }
+        koopa_context_manager.set_symbol_allocated_in_this_level(symbol_name);
     }
     return Result();
 }
@@ -250,18 +318,18 @@ Result ConstExpAST::print(std::stringstream &output_stream) const
 
 Result LValAST::print(std::stringstream &output_stream) const
 {
-    if (symbol_table.read(left_value_symbol).type == Symbol::Type::VAR)
+    if (koopa_context_manager.name_to_symbol(left_value_symbol).type == Symbol::Type::VAR)
     {
         std::string symbol_name = left_value_symbol;
-        std::string suffix = std::to_string(symbol_table.read(symbol_name).val);
+        std::string suffix = std::to_string(koopa_context_manager.name_to_symbol(symbol_name).val);
         std::string symbol_name_with_suffix = symbol_name + "_" + suffix;
         Result result = Result(Result::Type::REG);
         output_stream << "\t" << result << " = load @" << symbol_name_with_suffix << "\n";
         return result;
     }
-    else if (symbol_table.read(left_value_symbol).type == Symbol::Type::VAL)
+    else if (koopa_context_manager.name_to_symbol(left_value_symbol).type == Symbol::Type::VAL)
     {
-        Result result = Result(Result::Type::IMM, symbol_table.read(left_value_symbol).val);
+        Result result = Result(Result::Type::IMM, koopa_context_manager.name_to_symbol(left_value_symbol).val);
         return result;
     }
     else

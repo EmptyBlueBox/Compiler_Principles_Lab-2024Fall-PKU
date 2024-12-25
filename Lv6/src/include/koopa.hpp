@@ -16,7 +16,7 @@
 #include <sstream>
 #include <optional> // --std=c++17 is needed
 
-#include "util_koopa.hpp"
+#include "koopa_util.hpp"
 
 //////////////////////////////////////////
 // Program Unit
@@ -138,12 +138,15 @@ public:
         Assign,
         Expression,
         Block,
-        Return
+        Return,
+        If
     };
     StmtType stmt_type;
-    std::optional<std::unique_ptr<BaseAST>> lval;  // 语句中的左值
-    std::optional<std::unique_ptr<BaseAST>> exp;   // 语句中的表达式
-    std::optional<std::unique_ptr<BaseAST>> block; // 语句其实是另一个用大括号包裹的语句块
+    std::optional<std::unique_ptr<BaseAST>> lval;             // 语句中的左值
+    std::optional<std::unique_ptr<BaseAST>> exp;              // 语句中的表达式
+    std::optional<std::unique_ptr<BaseAST>> block;            // 语句中的基本块, 其实是另一个用大括号包裹的语句块
+    std::optional<std::unique_ptr<BaseAST>> inside_if_stmt;   // 语句中的 if ... 语句块
+    std::optional<std::unique_ptr<BaseAST>> inside_else_stmt; // 语句中的 else ... 语句块
 
     /**
      * @brief 打印抽象语法树。
