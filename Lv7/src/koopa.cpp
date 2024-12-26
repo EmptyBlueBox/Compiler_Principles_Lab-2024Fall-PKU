@@ -153,7 +153,6 @@ Result StmtAST::print(std::stringstream &output_stream) const
     }
     else if (stmt_type == StmtType::If)
     {
-        koopa_context_manager.new_symbol_table_hierarchy();
         koopa_context_manager.total_if_else_statement_count++;
         std::string then_label = "%then_" + std::to_string(koopa_context_manager.total_if_else_statement_count);
         std::string else_label = "%else_" + std::to_string(koopa_context_manager.total_if_else_statement_count);
@@ -169,7 +168,31 @@ Result StmtAST::print(std::stringstream &output_stream) const
 
         // if 语句块
         output_stream << then_label << ":" << std::endl;
+
+        // 进入 if 语句块, 不用为了特判如下的这种单行语句创建新的符号表, 因为文档里的规约规则没有这种情况, 变量的声明和定义不可能出现在单行 if 中
+        // int main()
+        // {
+        //     int a = 1;
+        //     if (a)
+        //         int a = 1;
+        //     else
+        //         int a = 2;
+        //     return 0;
+        // }
         Result result_if = (*inside_if_stmt)->print(output_stream);
+
+        // 如果 if 语句块显式的返回了, 就不要跳转了, 否则输出这样的 koopa 代码是错误的:
+        // fun @main(): i32 {
+        // %entry:
+        //     br 0, %then_1, %else_1
+        // %then_1:
+        //     ret 1
+        //     jump %end_1
+        // %else_1:
+        //     ret 2
+        //     jump %end_1
+        // %end_1:
+        // }
         if (!result_if.control_flow_returned)
         {
             output_stream << "\tjump " << end_label << std::endl;
@@ -180,7 +203,10 @@ Result StmtAST::print(std::stringstream &output_stream) const
         if (inside_else_stmt)
         {
             output_stream << else_label << ":" << std::endl;
+
+            // 和 if 同理
             result_else = (*inside_else_stmt)->print(output_stream);
+
             if (!result_else.control_flow_returned)
             {
                 output_stream << "\tjump " << end_label << std::endl;
@@ -191,11 +217,11 @@ Result StmtAST::print(std::stringstream &output_stream) const
         // 但是为了避免这样的空 %end , 如果已经结束了就不输出 %end 了
         // fun @main(): i32 {
         // %entry:
-        // 	br 0, %then_1, %else_1
+        // 	   br 0, %then_1, %else_1
         // %then_1:
-        // 	ret 1
+        //     ret 1
         // %else_1:
-        // 	ret 2
+        //     ret 2
         // %end_1:
         // }
         Result result = Result();
@@ -207,7 +233,6 @@ Result StmtAST::print(std::stringstream &output_stream) const
         {
             result.control_flow_returned = true;
         }
-        koopa_context_manager.delete_symbol_table_hierarchy();
         return result;
     }
     else
