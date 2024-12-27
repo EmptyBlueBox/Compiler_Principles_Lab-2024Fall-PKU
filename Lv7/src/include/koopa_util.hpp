@@ -112,6 +112,12 @@ public:
     // 当前的 if ... else ... 语句数量, 遇见一个加一, 离开一个 **不** 减一
     int total_if_else_statement_count = 0;
 
+    // 当前的 && 语句数量, 遇见一个加一
+    int total_and_statement_count = 0;
+
+    // 当前的 || 语句数量, 遇见一个加一
+    int total_or_statement_count = 0;
+
     // 每进入一个大括号 (或者 if ... else ... 语句) 就创建一个新的符号表
     void new_symbol_table_hierarchy();
 

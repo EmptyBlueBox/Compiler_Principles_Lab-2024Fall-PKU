@@ -676,21 +676,72 @@ Result LAndExpAST::print(std::stringstream &output_stream) const
     }
     else if (left_and_exp && op && eq_exp)
     {
+        // 计算第一个操作数
         Result result_left = (*left_and_exp)->print(output_stream);
-        Result result_right = (*eq_exp)->print(output_stream);
-        if (result_left.type == Result::Type::IMM && result_right.type == Result::Type::IMM)
+
+        // 短路求值, 根据第一个操作数的形式分类
+        // 如果是立即数就可以编译期优化, 完全不用输出 jump 和 br 指令
+        // 如果是寄存器就先判断是不是 0, 如果是 0 就跳转到最后, 否则就计算第二个操作数
+        if (result_left.type == Result::Type::IMM && result_left.val == 0) // 立即数 0
         {
-            return Result(Result::Type::IMM, result_left.val && result_right.val);
+            return Result(Result::Type::IMM, 0); // 编译期放弃第二个操作数
+        }
+        else if (result_left.type == Result::Type::IMM && result_left.val != 0) // 立即数非 0, 需要计算第二个操作数
+        {
+            Result result_right = (*eq_exp)->print(output_stream);
+            if (result_right.type == Result::Type::IMM) // 第二个操作数是立即数
+            {
+                return Result(Result::Type::IMM, 1 && result_right.val);
+            }
+            else // 第二个操作数是寄存器
+            {
+                Result temp = Result(Result::Type::REG);
+                output_stream << "\t" << temp << " = ne " << result_right << ", 0\n";
+                return temp;
+            }
+        }
+        else if (result_left.type == Result::Type::REG) // 如果是寄存器, 不能在编译期完成短路求值, 就需要跳转来完成短路求值, 如果判断寄存器是 0 直接跳转到 and_end_label
+        {
+            // 每进入一个需要用分支跳转语句达成短路求值的 && 语句, 就设置一个跳转标签
+            koopa_context_manager.total_and_statement_count++;
+
+            // 设置跳转标签
+            std::string and_second_operator_label = "%and_second_operator_" + std::to_string(koopa_context_manager.total_and_statement_count);
+            std::string and_end_label = "%and_end_" + std::to_string(koopa_context_manager.total_and_statement_count);
+
+            // 假设第一个操作数存在了 %1 这个寄存器中, 编译期不知道第二个操作数 %2 是否存在, 所以无法返回 and 表达式整体的答案存在哪里了, 所以需要结果存在内存中以保证可以修改
+            std::string and_result_in_memory = "@and_result_in_memory_" + std::to_string(koopa_context_manager.total_and_statement_count);
+
+            // 如果第一个操作数是 1, 则跳转到 and_second_operator_label 看看第二个操作数是否是 1, 否则跳转到 and_end_label
+            Result temp_1 = Result(Result::Type::REG);
+            output_stream << "\t" << temp_1 << " = ne " << result_left << ", 0\n";
+            output_stream << "\t" << and_result_in_memory << " = alloc i32\n";
+            output_stream << "\tstore " << temp_1 << ", " << and_result_in_memory << "\n";
+            output_stream << "\tbr " << temp_1 << ", " << and_second_operator_label << ", " << and_end_label << "\n";
+
+            // 输出没有短路求值的控制流 label
+            output_stream << and_second_operator_label << ":" << std::endl;
+
+            // 计算第二个操作数
+            Result result_right = (*eq_exp)->print(output_stream);
+            Result temp_2 = Result(Result::Type::REG);
+            Result temp_3 = Result(Result::Type::REG);
+            output_stream << "\t" << temp_2 << " = ne " << result_right << ", 0\n";
+            output_stream << "\t" << temp_3 << " = and " << temp_1 << ", " << temp_2 << "\n";
+            output_stream << "\tstore " << temp_3 << ", " << and_result_in_memory << "\n";
+            output_stream << "\tjump " << and_end_label << "\n";
+
+            // 输出短路求值之后的控制流合并 label
+            output_stream << and_end_label << ":" << std::endl;
+
+            // 把结果从内存中读取到寄存器中
+            Result result = Result(Result::Type::REG);
+            output_stream << "\t" << result << " = load " << and_result_in_memory << "\n";
+            return result;
         }
         else
         {
-            Result temp_1 = Result(Result::Type::REG);
-            Result temp_2 = Result(Result::Type::REG);
-            Result result = Result(Result::Type::REG);
-            output_stream << "\t" << temp_1 << " = ne " << result_left << ", 0\n";
-            output_stream << "\t" << temp_2 << " = ne " << result_right << ", 0\n";
-            output_stream << "\t" << result << " = and " << temp_1 << ", " << temp_2 << "\n";
-            return result;
+            throw std::runtime_error("LAndExpAST::print: invalid first operand of logical AND expression");
         }
     }
     else
@@ -708,18 +759,67 @@ Result LOrExpAST::print(std::stringstream &output_stream) const
     else if (left_or_exp && op && left_and_exp)
     {
         Result result_left = (*left_or_exp)->print(output_stream);
-        Result result_right = (*left_and_exp)->print(output_stream);
-        if (result_left.type == Result::Type::IMM && result_right.type == Result::Type::IMM)
+
+        if (result_left.type == Result::Type::IMM && result_left.val != 0) // 立即数非 0
         {
-            return Result(Result::Type::IMM, result_left.val || result_right.val);
+            return Result(Result::Type::IMM, 1);
+        }
+        else if (result_left.type == Result::Type::IMM && result_left.val == 0) // 立即数 0
+        {
+            Result result_right = (*left_and_exp)->print(output_stream);
+            if (result_right.type == Result::Type::IMM)
+            {
+                return Result(Result::Type::IMM, 0 || result_right.val);
+            }
+            else
+            {
+                Result temp = Result(Result::Type::REG);
+                output_stream << "\t" << temp << " = ne " << result_right << ", 0\n";
+                return temp;
+            }
+        }
+        else if (result_left.type == Result::Type::REG) // 如果是寄存器, 不能在编译期完成短路求值, 就需要跳转来完成短路求值, 如果判断寄存器是 0 直接跳转到 or_end_label
+        {
+            // 每进入一个需要用分支跳转语句达成短路求值的 || 语句, 就设置一个跳转标签
+            koopa_context_manager.total_or_statement_count++;
+
+            // 设置跳转标签
+            std::string or_second_operator_label = "%or_second_operator_" + std::to_string(koopa_context_manager.total_or_statement_count);
+            std::string or_end_label = "%or_end_" + std::to_string(koopa_context_manager.total_or_statement_count);
+
+            // 假设第一个操作数存在了 %1 这个寄存器中, 编译期不知道第二个操作数 %2 是否存在, 所以无法返回 or 表达式整体的答案存在哪里了, 所以需要结果存在内存中以保证可以修改
+            std::string or_result_in_memory = "@or_result_in_memory_" + std::to_string(koopa_context_manager.total_or_statement_count);
+
+            // 如果第一个操作数是 0, 则跳转到 or_second_operator_label 看看第二个操作数是否是 0, 否则跳转到 or_end_label
+            Result temp_1 = Result(Result::Type::REG);
+            output_stream << "\t" << temp_1 << " = ne " << result_left << ", 0\n";
+            output_stream << "\t" << or_result_in_memory << " = alloc i32\n";
+            output_stream << "\tstore " << temp_1 << ", " << or_result_in_memory << "\n";
+            output_stream << "\tbr " << temp_1 << ", " << or_end_label << ", " << or_second_operator_label << "\n";
+
+            // 输出没有短路求值的控制流 label
+            output_stream << or_second_operator_label << ":" << std::endl;
+
+            // 计算第二个操作数
+            Result result_right = (*left_and_exp)->print(output_stream);
+            Result temp_2 = Result(Result::Type::REG);
+            Result temp_3 = Result(Result::Type::REG);
+            output_stream << "\t" << temp_2 << " = ne " << result_right << ", 0\n";
+            output_stream << "\t" << temp_3 << " = or " << temp_1 << ", " << temp_2 << "\n";
+            output_stream << "\tstore " << temp_3 << ", " << or_result_in_memory << "\n";
+            output_stream << "\tjump " << or_end_label << "\n";
+
+            // 输出短路求值之后的控制流合并 label
+            output_stream << or_end_label << ":" << std::endl;
+
+            // 把结果从内存中读取到寄存器中
+            Result result = Result(Result::Type::REG);
+            output_stream << "\t" << result << " = load " << or_result_in_memory << "\n";
+            return result;
         }
         else
         {
-            Result temp = Result(Result::Type::REG);
-            Result result = Result(Result::Type::REG);
-            output_stream << "\t" << temp << " = or " << result_left << ", " << result_right << "\n";
-            output_stream << "\t" << result << " = ne " << temp << ", 0\n";
-            return result;
+            throw std::runtime_error("LOrExpAST::print: invalid first operand of logical OR expression");
         }
     }
     else
