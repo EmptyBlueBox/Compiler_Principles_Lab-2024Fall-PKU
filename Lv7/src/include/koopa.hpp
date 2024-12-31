@@ -139,14 +139,18 @@ public:
         Expression,
         Block,
         Return,
-        If
+        If,
+        While,
+        Break,
+        Continue
     };
     StmtType stmt_type;
-    std::optional<std::unique_ptr<BaseAST>> lval;             // 语句中的左值
-    std::optional<std::unique_ptr<BaseAST>> exp;              // 语句中的表达式
-    std::optional<std::unique_ptr<BaseAST>> block;            // 语句中的基本块, 其实是另一个用大括号包裹的语句块
-    std::optional<std::unique_ptr<BaseAST>> inside_if_stmt;   // 语句中的 if ... 语句块
-    std::optional<std::unique_ptr<BaseAST>> inside_else_stmt; // 语句中的 else ... 语句块
+    std::optional<std::unique_ptr<BaseAST>> lval;              // 语句中的左值
+    std::optional<std::unique_ptr<BaseAST>> exp;               // 语句中的表达式
+    std::optional<std::unique_ptr<BaseAST>> block;             // 语句中的基本块, 其实是另一个用大括号包裹的语句块
+    std::optional<std::unique_ptr<BaseAST>> inside_if_stmt;    // 语句中的 if ... 语句块
+    std::optional<std::unique_ptr<BaseAST>> inside_else_stmt;  // 语句中的 else ... 语句块
+    std::optional<std::unique_ptr<BaseAST>> inside_while_stmt; // 语句中的 while ... 语句块
 
     /**
      * @brief 打印抽象语法树。

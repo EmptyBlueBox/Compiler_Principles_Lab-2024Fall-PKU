@@ -31,13 +31,13 @@ using namespace std;
 
 
 // lexer 返回的所有 token 种类的声明, 终结符的类型为 str_val 和 int_val
-%token INT RETURN CONST IF ELSE
+%token INT RETURN CONST IF ELSE WHILE BREAK CONTINUE
 %token <str_val> IDENT
 %token <int_val> INT_CONST
 %token <str_val> EXCLUSIVE_UNARY_OP MUL_OP ADD_OP REL_OP EQ_OP AND_OP OR_OP // Operators
 
 // 非终结符的类型定义
-%type <ast_val> FuncDef FuncType Block BlockItem Stmt StmtWithElse// Program Unit
+%type <ast_val> FuncDef FuncType Block BlockItem Stmt StmtWithElse // Program Unit
 %type <ast_val> Decl BType ConstDecl ConstDef ConstInitVal VarDecl VarDef InitVal // Declaration
 %type <ast_val> Exp ConstExp LVal UnaryExp PrimaryExp MulExp AddExp LOrExp LAndExp RelExp EqExp // Expression
 %type <int_val> Number
@@ -166,6 +166,23 @@ Stmt
     ast->inside_else_stmt = unique_ptr<BaseAST>($7);
     $$ = ast;
   }
+  | WHILE '(' Exp ')' Stmt {
+    auto ast = new StmtAST();
+    ast->stmt_type = StmtAST::StmtType::While;
+    ast->exp = unique_ptr<BaseAST>($3);
+    ast->inside_while_stmt = unique_ptr<BaseAST>($5);
+    $$ = ast;
+  }
+  | BREAK ';' {
+    auto ast = new StmtAST();
+    ast->stmt_type = StmtAST::StmtType::Break;
+    $$ = ast;
+  }
+  | CONTINUE ';' {
+    auto ast = new StmtAST();
+    ast->stmt_type = StmtAST::StmtType::Continue;
+    $$ = ast;
+  }
   ;
 
 StmtWithElse
@@ -210,6 +227,23 @@ StmtWithElse
     ast->exp = unique_ptr<BaseAST>($3);
     ast->inside_if_stmt = unique_ptr<BaseAST>($5);
     ast->inside_else_stmt = unique_ptr<BaseAST>($7);
+    $$ = ast;
+  }
+  | WHILE '(' Exp ')' StmtWithElse {
+    auto ast = new StmtAST();
+    ast->stmt_type = StmtAST::StmtType::While;
+    ast->exp = unique_ptr<BaseAST>($3);
+    ast->inside_while_stmt = unique_ptr<BaseAST>($5);
+    $$ = ast;
+  }
+  | BREAK ';' {
+    auto ast = new StmtAST();
+    ast->stmt_type = StmtAST::StmtType::Break;
+    $$ = ast;
+  }
+  | CONTINUE ';' {
+    auto ast = new StmtAST();
+    ast->stmt_type = StmtAST::StmtType::Continue;
     $$ = ast;
   }
   ;

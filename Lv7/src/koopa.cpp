@@ -51,7 +51,7 @@ Result BlockAST::print(std::stringstream &output_stream) const
     for (const auto &item : block_items)
     {
         Result result = item->print(output_stream);
-        if (result.control_flow_returned)
+        if (result.control_flow_returned || result.control_flow_while_interrupted)
         {
             koopa_context_manager.delete_symbol_table_hierarchy();
             return result;
@@ -113,7 +113,7 @@ Result StmtAST::print(std::stringstream &output_stream) const
         }
         else if (!lval && !exp && !block)
         {
-            output_stream << "\tret\n";
+            output_stream << "\tret 0\n";
             Result result = Result();
             result.control_flow_returned = true;
             return result;
@@ -181,7 +181,7 @@ Result StmtAST::print(std::stringstream &output_stream) const
         // }
         Result result_if = (*inside_if_stmt)->print(output_stream);
 
-        // 如果 if 语句块显式的返回了, 就不要跳转了, 否则输出这样的 koopa 代码是错误的:
+        // 如果 if 语句块显式的返回或者 break 或者 continue 了, 就不要跳转了, 否则输出这样的 koopa 代码是错误的:
         // fun @main(): i32 {
         // %entry:
         //     br 0, %then_1, %else_1
@@ -193,7 +193,7 @@ Result StmtAST::print(std::stringstream &output_stream) const
         //     jump %end_1
         // %end_1:
         // }
-        if (!result_if.control_flow_returned)
+        if (!result_if.control_flow_returned && !result_if.control_flow_while_interrupted)
         {
             output_stream << "\tjump " << end_label << std::endl;
         }
@@ -207,7 +207,7 @@ Result StmtAST::print(std::stringstream &output_stream) const
             // 和 if 同理
             result_else = (*inside_else_stmt)->print(output_stream);
 
-            if (!result_else.control_flow_returned)
+            if (!result_else.control_flow_returned && !result_else.control_flow_while_interrupted)
             {
                 output_stream << "\tjump " << end_label << std::endl;
             }
@@ -224,15 +224,87 @@ Result StmtAST::print(std::stringstream &output_stream) const
         //     ret 2
         // %end_1:
         // }
-        Result result = Result();
-        if (!result_if.control_flow_returned || !result_else.control_flow_returned)
+        if (!(result_if.control_flow_returned && result_else.control_flow_returned) && !(result_if.control_flow_while_interrupted && result_else.control_flow_while_interrupted))
         {
             output_stream << end_label << ":" << std::endl;
         }
-        else
+
+        // 如果 if 语句块和 else 语句块都返回了, 则总控制流返回; 如果 if 语句块和 else 语句块都打断了 while 循环, 则总控制流打断 while 循环
+        Result result = Result();
+        if (result_if.control_flow_returned && result_else.control_flow_returned)
         {
             result.control_flow_returned = true;
         }
+        if (result_if.control_flow_while_interrupted && result_else.control_flow_while_interrupted)
+        {
+            result.control_flow_while_interrupted = true;
+        }
+        return result;
+    }
+    else if (stmt_type == StmtType::While)
+    {
+        if (!exp || !inside_while_stmt)
+        {
+            throw std::runtime_error("StmtAST::print: invalid while statement");
+        }
+        koopa_context_manager.total_while_statement_count++;
+        int current_while_statement_count = koopa_context_manager.total_while_statement_count;
+        koopa_context_manager.while_statement_stack.push(current_while_statement_count);
+        std::string while_entry_label = "%while_entry_" + std::to_string(current_while_statement_count);
+        std::string while_body_label = "%while_body_" + std::to_string(current_while_statement_count);
+        std::string while_end_label = "%while_end_" + std::to_string(current_while_statement_count);
+
+        // while 的条件表达式块
+        output_stream << "\tjump " << while_entry_label << std::endl;
+        output_stream << while_entry_label << ":" << std::endl;
+        Result exp_result = (*exp)->print(output_stream);
+        output_stream << "\tbr " << exp_result << ", " << while_body_label << ", " << while_end_label << std::endl;
+
+        // while 的循环体块
+        output_stream << while_body_label << ":" << std::endl;
+        Result result = (*inside_while_stmt)->print(output_stream);
+        if (!result.control_flow_returned && !result.control_flow_while_interrupted)
+        {
+            output_stream << "\tjump " << while_entry_label << std::endl;
+        }
+
+        // while 的结束块
+        output_stream << while_end_label << ":" << std::endl;
+        koopa_context_manager.while_statement_stack.pop();
+
+        if (result.control_flow_returned)
+        {
+            // 在循环体里 return 了, 但是还是需要补上一个 ret 以防止空的 %while_end 出现
+            output_stream << "\tret 0\n";
+        }
+        // 出了循环体, 需要清空 control_flow_while_interrupted , control_flow_while_interrupted 只管到 while 语句内部, control_flow_returned 只管到函数内部
+        result.control_flow_while_interrupted = false;
+        return result;
+    }
+    else if (stmt_type == StmtType::Break)
+    {
+        if (koopa_context_manager.while_statement_stack.empty())
+        {
+            throw std::runtime_error("StmtAST::print: invalid break statement, not in a while statement");
+        }
+        int current_while_statement_count = koopa_context_manager.while_statement_stack.top();
+        std::string while_end_label = "%while_end_" + std::to_string(current_while_statement_count);
+        output_stream << "\tjump " << while_end_label << "\n";
+        Result result = Result();
+        result.control_flow_while_interrupted = true;
+        return result;
+    }
+    else if (stmt_type == StmtType::Continue)
+    {
+        if (koopa_context_manager.while_statement_stack.empty())
+        {
+            throw std::runtime_error("StmtAST::print: invalid continue statement, not in a while statement");
+        }
+        int current_while_statement_count = koopa_context_manager.while_statement_stack.top();
+        std::string while_entry_label = "%while_entry_" + std::to_string(current_while_statement_count);
+        output_stream << "\tjump " << while_entry_label << "\n";
+        Result result = Result();
+        result.control_flow_while_interrupted = true;
         return result;
     }
     else

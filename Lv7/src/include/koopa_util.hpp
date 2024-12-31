@@ -12,7 +12,7 @@
 #include <unordered_map>
 #include <vector>
 #include <utility>
-
+#include <stack>
 /**
  * @brief 用于存储计算结果的类，可以是符号或立即数。
  * @note 如果当前函数会产生一个计算结果, 那么这个计算结果会存储在返回的 `Result` 类型的变量中
@@ -34,9 +34,10 @@ public:
         IMM, // 立即数
         REG  // 寄存器
     };
-    Type type;                          // 结果的类型
-    int val;                            // 结果的值
-    bool control_flow_returned = false; // 控制流是否已经返回, 比如普通的 return 语句, 或者 if ... else ... 两个都 return 了就返回 true
+    Type type;                                   // 结果的类型
+    int val;                                     // 结果的值
+    bool control_flow_returned = false;          // 控制流是否已经返回, 比如普通的 return 语句, 或者 if ... else ... 两个都 return 了就返回 true
+    bool control_flow_while_interrupted = false; // while 中的控制流是否被打断
 
     // 默认构造函数，初始化为立即数 0, 没有用到的地方
     Result() : type(Type::IMM), val(0) {}
@@ -109,8 +110,14 @@ private:
     std::map<std::pair<std::string, int>, bool> _is_symbol_allocated_in_this_level;
 
 public:
-    // 当前的 if ... else ... 语句数量, 遇见一个加一, 离开一个 **不** 减一
+    // 当前的 if ... else ... 语句数量, 遇见一个加一
     int total_if_else_statement_count = 0;
+
+    // 当前的 while ... 语句数量, 遇见一个加一
+    int total_while_statement_count = 0;
+
+    // 当前的 while ... 语句的栈, 用于管理 while ... 语句的嵌套之后如何判断 break 和 continue 语句应该跳转到哪个 while ... 语句的结束块
+    std::stack<int> while_statement_stack;
 
     // 当前的 && 语句数量, 遇见一个加一
     int total_and_statement_count = 0;
