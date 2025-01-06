@@ -224,7 +224,7 @@ Result StmtAST::print(std::stringstream &output_stream) const
         //     ret 2
         // %end_1:
         // }
-        if (!(result_if.control_flow_returned && result_else.control_flow_returned) && !(result_if.control_flow_while_interrupted && result_else.control_flow_while_interrupted))
+        if (!((result_if.control_flow_returned || result_if.control_flow_while_interrupted) && (result_else.control_flow_returned || result_else.control_flow_while_interrupted)))
         {
             output_stream << end_label << ":" << std::endl;
         }
@@ -272,13 +272,9 @@ Result StmtAST::print(std::stringstream &output_stream) const
         output_stream << while_end_label << ":" << std::endl;
         koopa_context_manager.while_statement_stack.pop();
 
-        if (result.control_flow_returned)
-        {
-            // 在循环体里 return 了, 但是还是需要补上一个 ret 以防止空的 %while_end 出现
-            output_stream << "\tret 0\n";
-        }
-        // 出了循环体, 需要清空 control_flow_while_interrupted , control_flow_while_interrupted 只管到 while 语句内部, control_flow_returned 只管到函数内部
-        result.control_flow_while_interrupted = false;
+        // 这里不会出现空置的 %while_end , 因为如果 while 语句块内部 return 了, 没有后续代码了, 那么在函数结尾的时候会发现没有显式的 return , 那么就会补上一个 ret 0
+        result.control_flow_while_interrupted = false; // 出了循环体, 需要清空 control_flow_while_interrupted, 这个符号只管到 while 语句内部
+        result.control_flow_returned = false;          // 在循环体内部 return 不代表整个函数真的返回了, 因为这个 while 可能根本就不会进去
         return result;
     }
     else if (stmt_type == StmtType::Break)
