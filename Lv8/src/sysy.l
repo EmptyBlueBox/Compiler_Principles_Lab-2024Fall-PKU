@@ -43,6 +43,7 @@ OrOp          "||"
 {LineComment}   { /* 忽略, 不做任何操作 */ }
 {BlockComment}  { /* 忽略, 不做任何操作 */ }
 
+"void"          { return VOID; }
 "int"           { return INT; }
 "return"        { return RETURN; }
 "const"         { return CONST; }

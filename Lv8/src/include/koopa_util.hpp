@@ -93,8 +93,10 @@ public:
 class KoopaContextManager
 {
 private:
+    // 符号表要有一个初始化, 用来存储全局变量
     // 每进入一个块, 就创建一个新的符号表, 块包括函数的大括号和语句块的大括号
-    std::vector<std::unordered_map<std::string, Symbol>> symbol_tables;
+    std::vector<std::unordered_map<std::string, Symbol>> symbol_tables = {std::unordered_map<std::string, Symbol>()};
+
     // 用于判断当前符号是否在当前下标被分配, 比如 @a_1 在 symbol_tables[0] 中被分配, 那么 is_symbol_allocated_in_this_level[std::make_pair("a", 1)] == true
     // 用来避免如下的例子中 a 被分配了两次
     // int a = 1;
@@ -110,6 +112,12 @@ private:
     std::map<std::pair<std::string, int>, bool> _is_symbol_allocated_in_this_level;
 
 public:
+    // 存储函数是否有返回值
+    std::map<std::string, bool> func_has_return_value;
+
+    // 当前需要被初始化的函数参数, 每次进入一个函数就设置这个变量, 在第一次进入 block 的时候初始化函数参数, 然后删除这个变量防止下次进入 block 的时候重复初始化
+    std::deque<std::string> *func_formal_params = nullptr;
+
     // 当前的 if ... else ... 语句数量, 遇见一个加一
     int total_if_else_statement_count = 0;
 
@@ -130,6 +138,9 @@ public:
 
     // 离开大括号 (或者 if ... else ... 语句) 就删除一个符号表
     void delete_symbol_table_hierarchy();
+
+    // 判断当前是否是全局符号表, 全局符号表的 symbol_tables 中只有一个元素
+    bool is_global();
 
     // 符号表操作, 在当前符号表中插入一个符号对应的字符串 (不包含后缀) 和 Symbol 对象 (立即数还是变量的层级)
     void insert_symbol(const std::string &name, Symbol symbol);

@@ -10,44 +10,118 @@ KoopaContextManager koopa_context_manager;
 // Program Unit
 //////////////////////////////////////////
 
-Result CompUnitAST::print(std::stringstream &output_stream) const
+Result ProgramAST::print(std::stringstream &output_stream) const
 {
-    Result result = func_def->print(output_stream);
-    return result;
+    // 声明库函数
+    output_stream << "decl @getint(): i32" << std::endl;
+    output_stream << "decl @getch(): i32" << std::endl;
+    output_stream << "decl @getarray(*i32): i32" << std::endl;
+    koopa_context_manager.func_has_return_value["getint"] = true;
+    koopa_context_manager.func_has_return_value["getch"] = true;
+    koopa_context_manager.func_has_return_value["getarray"] = true;
+
+    output_stream << "decl @putint(i32)" << std::endl;
+    output_stream << "decl @putch(i32)" << std::endl;
+    output_stream << "decl @putarray(i32, *i32)" << std::endl;
+    koopa_context_manager.func_has_return_value["putint"] = false;
+    koopa_context_manager.func_has_return_value["putch"] = false;
+    koopa_context_manager.func_has_return_value["putarray"] = false;
+
+    output_stream << "decl @starttime()" << std::endl;
+    output_stream << "decl @stoptime()" << std::endl;
+    koopa_context_manager.func_has_return_value["starttime"] = false;
+    koopa_context_manager.func_has_return_value["stoptime"] = false;
+    output_stream << std::endl;
+
+    // 打印每个 CompUnit
+    for (auto &comp_unit : comp_units)
+    {
+        comp_unit->print(output_stream);
+    }
+    return Result();
 }
 
+// fun @half(@x: i32): i32 {
+// %entry:
+// }
 Result FuncDefAST::print(std::stringstream &output_stream) const
 {
-    output_stream << "fun @" << ident << "(): ";
-    func_type->print(output_stream);
-    output_stream << " {" << std::endl;
-    output_stream << "%entry:" << std::endl;
-    Result result = block->print(output_stream);
-    // 如果 block 没有显式的 ret 指令, 则补上一个 ret 0
-    if (!result.control_flow_returned)
-    {
-        output_stream << "\tret 0" << std::endl;
-    }
-    output_stream << "}" << std::endl;
-    return result;
-}
+    output_stream << "fun @" << ident << "(";
 
-Result FuncTypeAST::print(std::stringstream &output_stream) const
-{
-    if (type == "int")
+    // 打印函数参数
+    int param_cnt = func_formal_params->size();
+    if (param_cnt > 0)
     {
-        output_stream << "i32";
+        for (int i = 0; i < param_cnt; i++)
+        {
+            output_stream << "@" << func_formal_params->at(i) << ": i32";
+            if (i != param_cnt - 1)
+            {
+                output_stream << ", ";
+            }
+        }
+    }
+
+    // 保存当前需要被初始化的函数参数
+    koopa_context_manager.func_formal_params = func_formal_params;
+
+    // 打印函数返回值类型
+
+    if (func_type == FuncType::INT)
+    {
+        output_stream << "): i32";
+        koopa_context_manager.func_has_return_value[ident] = true;
     }
     else
     {
-        throw std::runtime_error("FuncTypeAST::print: invalid function type");
+        output_stream << ")";
+        koopa_context_manager.func_has_return_value[ident] = false;
     }
-    return Result();
+    output_stream << "\n{\n";
+    output_stream << "%entry:" << std::endl;
+
+    // 打印函数块
+    Result result = block->print(output_stream);
+
+    // 如果 block 没有显式的 ret 指令, 则补上一个 ret
+    if (!result.control_flow_returned)
+    {
+        if (func_type == FuncType::VOID)
+        {
+            output_stream << "\tret" << std::endl;
+        }
+        else
+        {
+            output_stream << "\tret 0" << std::endl;
+        }
+    }
+    output_stream << "}\n\n";
+
+    // control_flow_returned 只管到函数内部, 出了函数就清空
+    result.control_flow_returned = false;
+    return result;
 }
 
 Result BlockAST::print(std::stringstream &output_stream) const
 {
     koopa_context_manager.new_symbol_table_hierarchy();
+
+    // 如果当前需要被初始化的函数参数不为空, 则初始化函数参数
+    if (koopa_context_manager.func_formal_params)
+    {
+        for (const auto &item : *koopa_context_manager.func_formal_params)
+        {
+            koopa_context_manager.insert_symbol(item, Symbol(Symbol::Type::VAR, 0));
+            std::string symbol_name = item;
+            std::string suffix = std::to_string(koopa_context_manager.name_to_symbol(symbol_name).val);
+            std::string symbol_name_with_suffix = symbol_name + "_" + suffix;
+            output_stream << "\t@" << symbol_name_with_suffix << " = alloc i32\n";
+            output_stream << "\tstore @" << item << ", @" << symbol_name_with_suffix << "\n";
+        }
+        koopa_context_manager.func_formal_params = nullptr;
+    }
+
+    // 打印块中的语句
     for (const auto &item : block_items)
     {
         Result result = item->print(output_stream);
@@ -57,7 +131,10 @@ Result BlockAST::print(std::stringstream &output_stream) const
             return result;
         }
     }
+
+    // 离开块, 删除符号表
     koopa_context_manager.delete_symbol_table_hierarchy();
+
     // 如果没有显式的 return 语句, 则返回 0 , 并且不设置 control_flow_returned 为 true, 以表示没有返回
     return Result();
 }
@@ -113,7 +190,7 @@ Result StmtAST::print(std::stringstream &output_stream) const
         }
         else if (!lval && !exp && !block)
         {
-            output_stream << "\tret 0\n";
+            output_stream << "\tret\n";
             Result result = Result();
             result.control_flow_returned = true;
             return result;
@@ -368,31 +445,54 @@ Result VarDeclAST::print(std::stringstream &output_stream) const
 
 Result VarDefAST::print(std::stringstream &output_stream) const
 {
-    if (var_init_val)
+    if (koopa_context_manager.is_global())
     {
-        Result value_result = (*var_init_val)->print(output_stream);
-        koopa_context_manager.insert_symbol(var_symbol, Symbol(Symbol::Type::VAR, value_result.val));
-        std::string symbol_name = var_symbol;
-        std::string suffix = std::to_string(koopa_context_manager.name_to_symbol(symbol_name).val);
-        std::string symbol_name_with_suffix = symbol_name + "_" + suffix;
-        if (!koopa_context_manager.is_symbol_allocated_in_this_level(symbol_name))
+        if (var_init_val)
         {
-            output_stream << "\t@" << symbol_name_with_suffix << " = alloc i32\n"; // TODO: 这里需要根据类型分配空间, 但是类型保存在上一层 VarDeclAST 中的 btype 中, 访问不到, 但是暂时只需要处理 int 类型, 所以 hard code 即可
+            Result value_result = (*var_init_val)->print(output_stream);
+            koopa_context_manager.insert_symbol(var_symbol, Symbol(Symbol::Type::VAR, value_result.val));
+            std::string symbol_name = var_symbol;
+            std::string suffix = std::to_string(koopa_context_manager.name_to_symbol(symbol_name).val);
+            std::string symbol_name_with_suffix = symbol_name + "_" + suffix;
+            output_stream << "global @" << symbol_name_with_suffix << " = alloc i32, " << value_result << "\n";
         }
-        koopa_context_manager.set_symbol_allocated_in_this_level(symbol_name);
-        output_stream << "\tstore " << value_result << ", @" << symbol_name_with_suffix << "\n";
+        else
+        {
+            koopa_context_manager.insert_symbol(var_symbol, Symbol(Symbol::Type::VAR, 0));
+            std::string symbol_name = var_symbol;
+            std::string suffix = std::to_string(koopa_context_manager.name_to_symbol(symbol_name).val);
+            std::string symbol_name_with_suffix = symbol_name + "_" + suffix;
+            output_stream << "global @" << symbol_name_with_suffix << " = alloc i32, zeroinit\n";
+        }
     }
     else
     {
-        koopa_context_manager.insert_symbol(var_symbol, Symbol(Symbol::Type::VAR, 0));
-        std::string symbol_name = var_symbol;
-        std::string suffix = std::to_string(koopa_context_manager.name_to_symbol(symbol_name).val);
-        std::string symbol_name_with_suffix = symbol_name + "_" + suffix;
-        if (!koopa_context_manager.is_symbol_allocated_in_this_level(symbol_name))
+        if (var_init_val)
         {
-            output_stream << "\t@" << symbol_name_with_suffix << " = alloc i32\n"; // TODO: 这里需要根据类型分配空间, 但是类型保存在上一层 VarDeclAST 中的 btype 中, 访问不到, 但是暂时只需要处理 int 类型, 所以 hard code 即可
+            Result value_result = (*var_init_val)->print(output_stream);
+            koopa_context_manager.insert_symbol(var_symbol, Symbol(Symbol::Type::VAR, value_result.val));
+            std::string symbol_name = var_symbol;
+            std::string suffix = std::to_string(koopa_context_manager.name_to_symbol(symbol_name).val);
+            std::string symbol_name_with_suffix = symbol_name + "_" + suffix;
+            if (!koopa_context_manager.is_symbol_allocated_in_this_level(symbol_name))
+            {
+                output_stream << "\t@" << symbol_name_with_suffix << " = alloc i32\n"; // TODO: 这里需要根据类型分配空间, 但是类型保存在上一层 VarDeclAST 中的 btype 中, 访问不到, 但是暂时只需要处理 int 类型, 所以 hard code 即可
+            }
+            koopa_context_manager.set_symbol_allocated_in_this_level(symbol_name);
+            output_stream << "\tstore " << value_result << ", @" << symbol_name_with_suffix << "\n";
         }
-        koopa_context_manager.set_symbol_allocated_in_this_level(symbol_name);
+        else
+        {
+            koopa_context_manager.insert_symbol(var_symbol, Symbol(Symbol::Type::VAR, 0));
+            std::string symbol_name = var_symbol;
+            std::string suffix = std::to_string(koopa_context_manager.name_to_symbol(symbol_name).val);
+            std::string symbol_name_with_suffix = symbol_name + "_" + suffix;
+            if (!koopa_context_manager.is_symbol_allocated_in_this_level(symbol_name))
+            {
+                output_stream << "\t@" << symbol_name_with_suffix << " = alloc i32\n"; // TODO: 这里需要根据类型分配空间, 但是类型保存在上一层 VarDeclAST 中的 btype 中, 访问不到, 但是暂时只需要处理 int 类型, 所以 hard code 即可
+            }
+            koopa_context_manager.set_symbol_allocated_in_this_level(symbol_name);
+        }
     }
     return Result();
 }
@@ -462,11 +562,11 @@ Result PrimaryExpAST::print(std::stringstream &output_stream) const
 
 Result UnaryExpAST::print(std::stringstream &output_stream) const
 {
-    if (primary_exp && !op && !unary_exp)
+    if (primary_exp && !op && !unary_exp && !func_name && !func_real_params)
     {
         return (*primary_exp)->print(output_stream);
     }
-    else if (!primary_exp && op && unary_exp)
+    else if (!primary_exp && op && unary_exp && !func_name && !func_real_params)
     {
         Result unary_result = (*unary_exp)->print(output_stream);
         if (unary_result.type == Result::Type::IMM)
@@ -508,6 +608,49 @@ Result UnaryExpAST::print(std::stringstream &output_stream) const
                 throw std::runtime_error("UnaryExpAST::print: invalid unary operator when unary_result is not immediate");
             }
             return result;
+        }
+    }
+    else if (!primary_exp && !op && !unary_exp && func_name && func_real_params)
+    {
+        std::vector<Result> params_result;
+        for (const auto &param : *(*func_real_params))
+        {
+            params_result.push_back(param->print(output_stream));
+        }
+
+        if (koopa_context_manager.func_has_return_value.find(*func_name) == koopa_context_manager.func_has_return_value.end())
+        {
+            throw std::runtime_error("UnaryExpAST::print: function " + *func_name + " is not defined");
+        }
+
+        if (koopa_context_manager.func_has_return_value[*func_name])
+        {
+            Result result = Result(Result::Type::REG);
+            output_stream << "\t" << result << " = call @" << *func_name << "(";
+            for (size_t i = 0; i < params_result.size(); i++)
+            {
+                output_stream << params_result[i];
+                if (i != params_result.size() - 1)
+                {
+                    output_stream << ", ";
+                }
+            }
+            output_stream << ")\n";
+            return result;
+        }
+        else
+        {
+            output_stream << "\tcall @" << *func_name << "(";
+            for (size_t i = 0; i < params_result.size(); i++)
+            {
+                output_stream << params_result[i];
+                if (i != params_result.size() - 1)
+                {
+                    output_stream << ", ";
+                }
+            }
+            output_stream << ")\n";
+            return Result();
         }
     }
     else

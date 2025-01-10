@@ -18,10 +18,6 @@
 
 #include "koopa_util.hpp"
 
-//////////////////////////////////////////
-// Program Unit
-//////////////////////////////////////////
-
 /**
  * @brief 所有抽象语法树节点的基类。
  * @date 2024-10-27
@@ -40,52 +36,37 @@ public:
     virtual Result print(std::stringstream &output_stream) const = 0;
 };
 
+//////////////////////////////////////////
+// Program Unit
+//////////////////////////////////////////
+
 /**
- * @brief 程序单元抽象语法树类。
- * @date 2024-10-27
+ * @brief 全部程序
+ * @date 2025-01-10
  */
-class CompUnitAST : public BaseAST
+class ProgramAST : public BaseAST
 {
 public:
-    std::unique_ptr<BaseAST> func_def; // 函数定义
-
-    /**
-     * @brief 打印抽象语法树。
-     * @param[in] output_stream 输出流。
-     * @return 打印操作的结果。
-     * @date 2024-10-27
-     */
+    std::deque<std::unique_ptr<BaseAST>> comp_units;
     Result print(std::stringstream &output_stream) const override;
 };
 
 /**
- * @brief 函数定义抽象语法树类。
- * @date 2024-10-27
+ * @brief 函数定义
+ * @date 2025-01-10
  */
 class FuncDefAST : public BaseAST
 {
 public:
-    std::unique_ptr<BaseAST> func_type; // 函数类型
-    std::string ident;                  // 函数标识符
-    std::unique_ptr<BaseAST> block;     // 函数块
-
-    /**
-     * @brief 打印抽象语法树。
-     * @param[in] output_stream 输出流。
-     * @return 打印操作的结果。
-     * @date 2024-10-27
-     */
-    Result print(std::stringstream &output_stream) const override;
-};
-
-/**
- * @brief 函数类型抽象语法树类。
- * @date 2024-10-27
- */
-class FuncTypeAST : public BaseAST
-{
-public:
-    std::string type; // 函数的类型
+    enum class FuncType
+    {
+        INT,
+        VOID
+    };
+    FuncType func_type;                          // 函数类型
+    std::string ident;                           // 函数标识符
+    std::deque<std::string> *func_formal_params; // 函数参数
+    std::unique_ptr<BaseAST> block;              // 函数块
 
     /**
      * @brief 打印抽象语法树。
@@ -195,7 +176,6 @@ public:
 class ConstDeclAST : public BaseAST
 {
 public:
-    std::unique_ptr<BaseAST> btype;
     std::deque<std::unique_ptr<BaseAST>> const_defs;
     Result print(std::stringstream &output_stream) const override;
 };
@@ -231,7 +211,6 @@ public:
 class VarDeclAST : public BaseAST
 {
 public:
-    std::unique_ptr<BaseAST> btype;
     std::deque<std::unique_ptr<BaseAST>> var_defs;
     Result print(std::stringstream &output_stream) const override;
 };
@@ -244,6 +223,7 @@ public:
 class VarDefAST : public BaseAST
 {
 public:
+    bool is_global;
     std::string var_symbol;
     std::optional<std::unique_ptr<BaseAST>> var_init_val;
     Result print(std::stringstream &output_stream) const override;
@@ -329,9 +309,11 @@ public:
 class UnaryExpAST : public BaseAST
 {
 public:
-    std::optional<std::unique_ptr<BaseAST>> primary_exp; // 可选的基本表达式
-    std::optional<std::string> op;                       // 可选的操作符 ("+", "-", "!")
-    std::optional<std::unique_ptr<BaseAST>> unary_exp;   // 可选的一元表达式
+    std::optional<std::unique_ptr<BaseAST>> primary_exp;                    // 可选的基本表达式
+    std::optional<std::string> op;                                          // 可选的操作符 ("+", "-", "!")
+    std::optional<std::unique_ptr<BaseAST>> unary_exp;                      // 可选的一元表达式
+    std::optional<std::string> func_name;                                   // 可选的函数名
+    std::optional<std::deque<std::unique_ptr<BaseAST>> *> func_real_params; // 可选的函数调用实际参数, 指向一个 deque<unique_ptr<BaseAST>>
 
     /**
      * @brief 打印抽象语法树。

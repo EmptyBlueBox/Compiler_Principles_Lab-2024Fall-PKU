@@ -26,22 +26,25 @@ using namespace std;
   std::string *str_val;
   int int_val;
   BaseAST *ast_val;
-  std::deque<std::unique_ptr<BaseAST>> *deque_val;
+  std::deque<std::unique_ptr<BaseAST>> *ast_deque_val;
+  std::deque<std::string> *str_deque_val;
 }
 
 
 // lexer 返回的所有 token 种类的声明, 终结符的类型为 str_val 和 int_val
-%token INT RETURN CONST IF ELSE WHILE BREAK CONTINUE
+%token INT VOID RETURN CONST IF ELSE WHILE BREAK CONTINUE
 %token <str_val> IDENT
 %token <int_val> INT_CONST
 %token <str_val> EXCLUSIVE_UNARY_OP MUL_OP ADD_OP REL_OP EQ_OP AND_OP OR_OP // Operators
 
 // 非终结符的类型定义
-%type <ast_val> FuncDef FuncType Block BlockItem Stmt StmtWithElse // Program Unit
-%type <ast_val> Decl BType ConstDecl ConstDef ConstInitVal VarDecl VarDef InitVal // Declaration
+%type <ast_val> Program CompUnit Block BlockItem Stmt StmtWithElse// Program Unit
+%type <ast_val> FuncDef // Function
+%type <ast_val> Decl ConstDecl ConstDef ConstInitVal VarDecl VarDef InitVal // Declaration
 %type <ast_val> Exp ConstExp LVal UnaryExp PrimaryExp MulExp AddExp LOrExp LAndExp RelExp EqExp // Expression
 %type <int_val> Number
-%type <deque_val> ExtendBlockItem ExtendConstDef ExtendVarDef
+%type <str_deque_val> MultiFuncFParams
+%type <ast_deque_val> ExtendCompUnit ExtendBlockItem ExtendConstDef ExtendVarDef MultiFuncRParams
 
 %%
 
@@ -49,30 +52,71 @@ using namespace std;
 // Program Unit
 //////////////////////////////////////////
 
+Program
+  : CompUnit ExtendCompUnit {
+    auto program = make_unique<ProgramAST>();
+    auto comp_unit = $1;
+    program->comp_units.push_back(unique_ptr<BaseAST>(comp_unit));
+    for (auto& ptr : *$2) {
+      program->comp_units.push_back(std::move(ptr));
+    }
+    ast = move(program);
+  }
+  ;
+
+ExtendCompUnit
+  : {
+    std::deque<unique_ptr<BaseAST>> *deque = new std::deque<unique_ptr<BaseAST>>;
+    $$ = deque;
+  }
+  | CompUnit ExtendCompUnit {
+    std::deque<unique_ptr<BaseAST>> *deque = $2;
+    deque->push_front(unique_ptr<BaseAST>($1));
+    $$ = deque;
+  }
+  ;
 
 CompUnit
   : FuncDef {
-    auto comp_unit = make_unique<CompUnitAST>();
-    comp_unit->func_def = unique_ptr<BaseAST>($1);
-    ast = move(comp_unit);
+    $$ = $1;
+  }
+  | Decl {
+    $$ = $1;
   }
   ;
 
 FuncDef
-  : FuncType IDENT '(' ')' Block {
+  : INT IDENT '(' MultiFuncFParams ')' Block {
     auto ast = new FuncDefAST();
-    ast->func_type = unique_ptr<BaseAST>($1);
+    ast->func_type = FuncDefAST::FuncType::INT;
     ast->ident = *unique_ptr<string>($2);
-    ast->block = unique_ptr<BaseAST>($5);
+    ast->func_formal_params = $4;
+    ast->block = unique_ptr<BaseAST>($6);
+    $$ = ast;
+  }
+  | VOID IDENT '(' MultiFuncFParams ')' Block {
+    auto ast = new FuncDefAST();
+    ast->func_type = FuncDefAST::FuncType::VOID;
+    ast->ident = *unique_ptr<string>($2);
+    ast->func_formal_params = $4;
+    ast->block = unique_ptr<BaseAST>($6);
     $$ = ast;
   }
   ;
 
-FuncType
-  : INT {
-    auto ast = new FuncTypeAST();
-    ast->type = "int";
-    $$ = ast;
+MultiFuncFParams
+  : {
+    $$ = new std::deque<std::string>;
+  }
+  | INT IDENT {
+    auto deque = new std::deque<std::string>;
+    deque->push_front(*unique_ptr<string>($2));
+    $$ = deque;
+  }
+  | INT IDENT ',' MultiFuncFParams {
+    auto deque = $4;
+    deque->push_front(*unique_ptr<string>($2));
+    $$ = deque;
   }
   ;
 
@@ -93,10 +137,10 @@ Block
 
 ExtendBlockItem
   : {
-    $$ = new deque<unique_ptr<BaseAST>>;
+    $$ = new std::deque<unique_ptr<BaseAST>>;
   }
   | BlockItem ExtendBlockItem {
-    deque<unique_ptr<BaseAST>> *deque = $2;
+    std::deque<unique_ptr<BaseAST>> *deque = $2;
     deque->push_front(unique_ptr<BaseAST>($1));
     $$ = deque;
   }
@@ -265,18 +309,9 @@ Decl
   }
   ;
 
-BType
-  : INT {
-    auto ast = new BTypeAST();
-    ast->type = "int";
-    $$ = ast;
-  }
-  ;
-
 ConstDecl
-  : CONST BType ConstDef ExtendConstDef ';' {
+  : CONST INT ConstDef ExtendConstDef ';' {
     auto ast = new ConstDeclAST();
-    ast->btype = unique_ptr<BaseAST>($2);
     ast->const_defs.push_back(unique_ptr<BaseAST>($3));
     for (auto& ptr : *$4) {
       ast->const_defs.push_back(std::move(ptr));
@@ -287,10 +322,10 @@ ConstDecl
 
 ExtendConstDef
   : {
-    $$ = new deque<unique_ptr<BaseAST>>;
+    $$ = new std::deque<unique_ptr<BaseAST>>;
   }
   | ',' ConstDef ExtendConstDef {
-    deque<unique_ptr<BaseAST>> *deque = $3;
+    std::deque<unique_ptr<BaseAST>> *deque = $3;
     deque->push_front(unique_ptr<BaseAST>($2));
     $$ = deque;
   }
@@ -314,9 +349,8 @@ ConstInitVal
   ;
 
 VarDecl
-  : BType VarDef ExtendVarDef ';' {
+  : INT VarDef ExtendVarDef ';' {
     auto ast = new VarDeclAST();
-    ast->btype = unique_ptr<BaseAST>($1);
     ast->var_defs.push_back(unique_ptr<BaseAST>($2));
     for (auto& ptr : *$3) {
       ast->var_defs.push_back(std::move(ptr));
@@ -327,10 +361,10 @@ VarDecl
 
 ExtendVarDef
   : {
-    $$ = new deque<unique_ptr<BaseAST>>;
+    $$ = new std::deque<unique_ptr<BaseAST>>;
   }
   | ',' VarDef ExtendVarDef {
-    deque<unique_ptr<BaseAST>> *deque = $3;
+    std::deque<unique_ptr<BaseAST>> *deque = $3;
     deque->push_front(unique_ptr<BaseAST>($2));
     $$ = deque;
   }
@@ -427,6 +461,29 @@ UnaryExp
     ast->op = *unique_ptr<string>($1);
     ast->unary_exp = unique_ptr<BaseAST>($2);
     $$ = ast;
+  }
+  | IDENT '(' MultiFuncRParams ')' {
+    auto ast = new UnaryExpAST();
+    ast->func_name = *unique_ptr<string>($1);
+    std::deque<unique_ptr<BaseAST>> *deque = $3;
+    ast->func_real_params = deque;
+    $$ = ast;
+  }
+  ;
+
+MultiFuncRParams
+  : {
+    $$ = new std::deque<unique_ptr<BaseAST>>;
+  }
+  | Exp {
+    std::deque<unique_ptr<BaseAST>> *deque = new std::deque<unique_ptr<BaseAST>>;
+    deque->push_front(unique_ptr<BaseAST>($1));
+    $$ = deque;
+  }
+  | Exp ',' MultiFuncRParams {
+    std::deque<unique_ptr<BaseAST>> *deque = $3;
+    deque->push_front(unique_ptr<BaseAST>($1));
+    $$ = deque;
   }
   ;
 
