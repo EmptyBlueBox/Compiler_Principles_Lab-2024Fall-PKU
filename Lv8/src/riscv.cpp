@@ -64,9 +64,6 @@ void visit(const koopa_raw_program_t &program)
     // 访问所有全局变量
     visit(program.values);
 
-    // Print ".text"
-    std::cout << "\t.text" << std::endl;
-
     // 访问所有函数
     visit(program.funcs);
 }
@@ -74,16 +71,24 @@ void visit(const koopa_raw_program_t &program)
 // 访问函数
 void visit(const koopa_raw_function_t &func)
 {
+    // 忽略库函数
+    if (func->bbs.len == 0)
+    {
+        return;
+    }
+
     // 获得函数名
     std::string function_name = func->name + 1;
 
     // 输出 RISC-V 的 prologue
-    std::cout << "\t.globl " << function_name << std::endl;
-    std::cout << function_name << ":" << std::endl;
+    riscv_printer.text();
+    riscv_printer.globl(function_name);
+    riscv_printer.label(function_name);
 
     // 计算栈帧大小
     // 如何判断一个指令存在返回值呢 ? 你也许还记得 Koopa IR 是强类型 IR, 所有指令都是有类型的.如果指令的类型为 unit(类似 C / C++ 中的 void), 则这条指令不存在返回值. 在 C / C++ 中, 每个 koopa_raw_value_t 都有一个名叫 ty 的字段, 它的类型是 koopa_raw_type_t.koopa_raw_type_t 中有一个字段叫做 tag, 存储了这个类型具体是何种类型.如果它的值为 KOOPA_RTT_UNIT, 说明这个类型是 unit 类型.或者你实在懒得判断的话,给所有指令都分配栈空间也不是不行, 只不过这样会浪费一些栈空间.
     int num_stack_frame_byte = 0;
+    int func_call_arg_on_stack = 0;
     for (size_t i = 0; i < func->bbs.len; ++i)
     {
         auto bb = reinterpret_cast<koopa_raw_basic_block_t>(func->bbs.buffer[i]);
@@ -91,22 +96,38 @@ void visit(const koopa_raw_function_t &func)
         for (size_t j = 0; j < bb->insts.len; ++j)
         {
             auto inst = reinterpret_cast<koopa_raw_value_t>(bb->insts.buffer[j]);
+
+            // 如果指令的类型是 unit, 则说明这条指令没有返回值, 需要减去 1
             if (inst->ty->tag == KOOPA_RTT_UNIT)
             {
                 num_stack_frame_byte -= 1;
             }
+
+            // 如果指令是 call 指令, 则需要额外计算变量表所需空间
+            if (inst->kind.tag == KOOPA_RVT_CALL)
+            {
+                int args = inst->kind.data.call.args.len;
+                // 除了八个在寄存器中的参数, 其他的参数都放在栈中
+                func_call_arg_on_stack = std::max(func_call_arg_on_stack, args - 8);
+            }
         }
     }
 
+    // 多分配一条 store 指令来存储 ra 寄存器, ra 是调用者保存寄存器, 调用者把它的 ra 存在每个栈帧的最上面, 修改这个寄存器为 call 的下一条指令, 然后进入下一个函数, 代表调用者的下一条指令
+    num_stack_frame_byte += 1;
+    // 额外分配存在栈上的参数
+    num_stack_frame_byte += func_call_arg_on_stack;
     // 计算栈帧大小
     num_stack_frame_byte *= 4;
-    num_stack_frame_byte = (num_stack_frame_byte + 15) / 16 * 16; // 对齐到 16 的倍数
+    // 对齐到 16 的倍数
+    num_stack_frame_byte = (num_stack_frame_byte + 15) / 16 * 16;
 
     // 初始化栈管理器
-    riscv_context_manager.init_stack_manager_for_one_function(function_name, num_stack_frame_byte);
+    riscv_context_manager.init_stack_manager_for_one_function(function_name, num_stack_frame_byte, func_call_arg_on_stack);
 
-    // 继续输出 RISC-V 的 prologue
-    riscv_printer.addi("sp", "sp", -num_stack_frame_byte, riscv_context_manager);
+    // 输出 RISC-V 的 prologue, 将 sp 减去栈帧大小, 保存 ra 寄存器
+    riscv_printer.addi("sp", "sp", -num_stack_frame_byte, riscv_context_manager);  // 开辟栈帧
+    riscv_printer.sw("ra", "sp", num_stack_frame_byte - 4, riscv_context_manager); // 保存 ra 寄存器
 
     // 访问所有基本块
     visit(func->bbs);
@@ -116,7 +137,11 @@ void visit(const koopa_raw_function_t &func)
 void visit(const koopa_raw_basic_block_t &bb)
 {
     // 输出基本块名
-    std::cout << bb->name + 1 << ":" << std::endl;
+    std::string bb_name = bb->name + 1;
+    if (bb_name != "entry") // 忽略 entry 基本块, 因为会造成不同函数重复定义 entry 跳转标签
+    {
+        std::cout << bb_name << ":" << std::endl;
+    }
     // 访问所有指令
     visit(bb->insts);
 }
@@ -131,6 +156,10 @@ void visit(const koopa_raw_value_t &value)
     const auto &kind = value->kind;
     switch (kind.tag)
     {
+    case KOOPA_RVT_CALL:
+        // 访问 call 指令
+        visit(kind.data.call, value);
+        break;
     case KOOPA_RVT_RETURN:
         // 访问 return 指令
         visit(kind.data.ret);
@@ -143,6 +172,10 @@ void visit(const koopa_raw_value_t &value)
         // 访问 alloc 指令, 分配内存是实际存在的指令, 但是汇编语言的内存分配是直接用栈指针管理的, 所以不需要显式的内存分配, 可以忽略 koopa 的 alloc 指令
         // 比如 @x = alloc i32 这样一个指令, 如果只有这个指令本身, 并不需要做任何操作也能保证 RISC-V 的正确性
         // 只有在使用了 @x 的时候, 比如 store 10, @x 这样的指令, 才需要设定 @x 的栈地址, 所以 alloc 指令可以忽略
+        break;
+    case KOOPA_RVT_GLOBAL_ALLOC:
+        // 访问 global_alloc 指令, 分配全局变量
+        visit(kind.data.global_alloc, value);
         break;
     case KOOPA_RVT_LOAD:
         // 访问 load 指令
@@ -166,6 +199,98 @@ void visit(const koopa_raw_value_t &value)
     }
 }
 
+// 访问 global_alloc 指令, 分配全局变量
+void visit(const koopa_raw_global_alloc_t &global_alloc, const koopa_raw_value_t &value)
+{
+    riscv_context_manager.init_global_var(value);
+    std::string global_var_name = riscv_context_manager.get_global_var_name(value);
+    // 输出全局变量
+    riscv_printer.data();
+    riscv_printer.globl(global_var_name);
+    riscv_printer.label(global_var_name);
+    auto init = global_alloc.init;
+    switch (init->kind.tag)
+    {
+    case KOOPA_RVT_INTEGER:
+        // 立即数
+        riscv_printer.word(init->kind.data.integer.value);
+        break;
+    case KOOPA_RVT_ZERO_INIT:
+        // 0
+        riscv_printer.zero(4);
+        break;
+    default:
+        // 其他类型暂时遇不到
+        throw std::runtime_error("visit: invalid global_alloc instruction");
+    }
+}
+
+// 访问 call 指令
+void visit(const koopa_raw_call_t &call, const koopa_raw_value_t &value)
+{
+    // 调用函数的参数数量
+    int args = call.args.len;
+    // 调用函数
+    for (int i = 0; i < std::min(args, 8); i++)
+    {
+        // 前八个参数存储在 a0 - a7 寄存器中
+        auto arg = reinterpret_cast<koopa_raw_value_t>(call.args.buffer[i]);
+        auto target = "a" + std::to_string(i);
+        // 判断是否为立即数
+        if (arg->kind.tag == KOOPA_RVT_INTEGER)
+        {
+            riscv_printer.li(target, arg->kind.data.integer.value);
+        }
+        else
+        {
+            // 从栈中加载数据到寄存器
+            StackManager &stack_manager = riscv_context_manager.get_current_function_stack_manager();
+            riscv_context_manager.allocate_reg(arg);
+            std::string temp_reg_name = riscv_context_manager.value_to_reg_string(arg);
+            riscv_printer.lw(temp_reg_name, "sp", stack_manager.get_value_stack_offset(arg), riscv_context_manager);
+            riscv_printer.mv(target, temp_reg_name);
+            riscv_context_manager.set_reg_free(arg);
+        }
+    }
+    // 处理超过 8 个参数的情况, 此时需要将参数存到栈上
+    for (int i = 8; i < args; i++)
+    {
+        auto arg = reinterpret_cast<koopa_raw_value_t>(call.args.buffer[i]);
+        int target = (i - 8) * 4;
+        if (arg->kind.tag == KOOPA_RVT_INTEGER)
+        {
+            // 分配一个临时寄存器
+            riscv_context_manager.allocate_reg(arg);
+            std::string temp_reg_name = riscv_context_manager.value_to_reg_string(arg);
+            // 将立即数存储到栈上
+            riscv_printer.li(temp_reg_name, arg->kind.data.integer.value);
+            riscv_printer.sw(temp_reg_name, "sp", target, riscv_context_manager);
+            // 释放临时寄存器
+            riscv_context_manager.set_reg_free(arg);
+        }
+        else
+        {
+            // 从栈中加载数据到寄存器
+            riscv_context_manager.allocate_reg(arg);
+            std::string temp_reg_name = riscv_context_manager.value_to_reg_string(arg);
+            riscv_printer.lw(temp_reg_name, "sp", target, riscv_context_manager);
+            // 将数据存储到栈上
+            riscv_printer.sw(temp_reg_name, "sp", target, riscv_context_manager);
+            // 释放临时寄存器
+            riscv_context_manager.set_reg_free(arg);
+        }
+    }
+    riscv_printer.call(call.callee->name + 1);
+
+    // 判断是否需要存储返回值
+    if (value->ty->tag != KOOPA_RTT_UNIT)
+    {
+        StackManager &stack_manager = riscv_context_manager.get_current_function_stack_manager();
+        stack_manager.save_value_to_stack(value);
+        riscv_printer.sw("a0", "sp", stack_manager.get_value_stack_offset(value), riscv_context_manager);
+    }
+}
+
 // 访问 branch 指令, 这个指令的输入是立即数或内存, 所以需要判断 branch.cond->kind.tag
 void visit(const koopa_raw_branch_t &branch, const koopa_raw_value_t &value)
 {
@@ -178,6 +303,26 @@ void visit(const koopa_raw_branch_t &branch, const koopa_raw_value_t &value)
     if (branch.cond->kind.tag == KOOPA_RVT_INTEGER)
     {
         riscv_printer.li(temp_reg_name, branch.cond->kind.data.integer.value);
+    }
+    // 运算数为函数参数
+    else if (branch.cond->kind.tag == KOOPA_RVT_FUNC_ARG_REF)
+    {
+        // 获取参数的索引
+        auto index = branch.cond->kind.data.func_arg_ref.index;
+        // 前 8 个参数放在 a0 - a7 寄存器中
+        if (index < 8)
+        {
+            riscv_printer.mv(temp_reg_name, "a" + std::to_string(index));
+        }
+        // 后面的参数要从栈上找
+        else
+        {
+            // 先获取当前栈帧大小
+            int stack_size = stack_manager.get_num_stack_frame_byte();
+            int offset = 4 * (index - 8);
+            // 从上一个栈帧中获取
+            riscv_printer.lw(temp_reg_name, "sp", stack_size + offset, riscv_context_manager);
+        }
     }
     else
     {
@@ -205,8 +350,20 @@ void visit(const koopa_raw_load_t &load, const koopa_raw_value_t &value)
     // 给中间结果分配一个寄存器, 这个寄存器对应 value, 为什么不用临时寄存器? 因为 lw 和 sw 也可能使用寄存器, 可能造成冲突
     riscv_context_manager.allocate_reg(value);
     std::string temp_reg_name = riscv_context_manager.value_to_reg_string(value);
-    // 从栈中加载数据到寄存器
-    riscv_printer.lw(temp_reg_name, "sp", stack_manager.get_value_stack_offset(load.src), riscv_context_manager);
+    // 如果是全局变量, 则需要先获取地址, 再获取值
+    if (load.src->kind.tag == KOOPA_RVT_GLOBAL_ALLOC)
+    {
+        // 获取全局变量的地址
+        riscv_printer.la(temp_reg_name, riscv_context_manager.get_global_var_name(load.src));
+        // 获取全局变量的值
+        riscv_printer.lw(temp_reg_name, temp_reg_name, 0, riscv_context_manager);
+    }
+    // 如果是栈上变量, 则直接获取值
+    else
+    {
+        // 从栈中加载数据到寄存器
+        riscv_printer.lw(temp_reg_name, "sp", stack_manager.get_value_stack_offset(load.src), riscv_context_manager);
+    }
     // 将数据保存到栈中, 同时输出 sw 指令
     stack_manager.save_value_to_stack(value);
     riscv_printer.sw(temp_reg_name, "sp", stack_manager.get_value_stack_offset(value), riscv_context_manager);
@@ -214,26 +371,78 @@ void visit(const koopa_raw_load_t &load, const koopa_raw_value_t &value)
     riscv_context_manager.set_reg_free(value);
 }
 
-// 访问 store 指令, store 的输出必然是内存, 但是输入可能是内存或者立即数
+// 访问 store 指令, store 的输入是内存或者立即数, 输出是栈内存或全局变量
 void visit(const koopa_raw_store_t &store, const koopa_raw_value_t &value)
 {
     // 当前函数的 StackManager
     StackManager &stack_manager = riscv_context_manager.get_current_function_stack_manager();
     // 给中间结果分配一个寄存器, 这个寄存器对应 value
     riscv_context_manager.allocate_reg(value);
-    std::string temp_reg_name = riscv_context_manager.value_to_reg_string(value);
-    // 判断 store.value 是否是立即数, 如果是立即数, 则需要先分配一个临时寄存器, 如果是内存, 则从内存中 lw 出来
-    if (store.value->kind.tag == KOOPA_RVT_INTEGER)
+    std::string temp_src_reg_name = riscv_context_manager.value_to_reg_string(value);
+
+    // 判断 store.value 是什么类型的
+    // 如果是函数参数
+    if (store.value->kind.tag == KOOPA_RVT_FUNC_ARG_REF)
     {
-        riscv_printer.li(temp_reg_name, store.value->kind.data.integer.value);
+        // 获取参数的索引
+        auto index = store.value->kind.data.func_arg_ref.index;
+        // 前 8 个参数放在 a0 - a7 寄存器中
+        if (index < 8)
+        {
+            riscv_printer.mv(temp_src_reg_name, "a" + std::to_string(index));
+        }
+        // 后面的参数要从栈上找
+        else
+        {
+            // 先获取当前栈帧大小
+            int stack_size = stack_manager.get_num_stack_frame_byte();
+            int offset = 4 * (index - 8);
+            // 从上一个栈帧中获取
+            riscv_printer.lw(temp_src_reg_name, "sp", stack_size + offset, riscv_context_manager);
+        }
+    }
+    // 如果是函数返回值
+    else if (store.value->kind.tag == KOOPA_RVT_CALL)
+    {
+        // 从栈中加载数据到寄存器
+        riscv_printer.lw(temp_src_reg_name, "sp", stack_manager.get_value_stack_offset(store.value), riscv_context_manager);
+    }
+    // 如果是立即数, 则需要先分配一个临时寄存器, 如果是内存, 则从内存中 lw 出来
+    else if (store.value->kind.tag == KOOPA_RVT_INTEGER)
+    {
+        riscv_printer.li(temp_src_reg_name, store.value->kind.data.integer.value);
+    }
+    // 如果是二元运算结果, 是栈上变量, 则从栈中加载数据到寄存器
+    else if (store.value->kind.tag == KOOPA_RVT_BINARY)
+    {
+        riscv_printer.lw(temp_src_reg_name, "sp", stack_manager.get_value_stack_offset(store.value), riscv_context_manager);
     }
     else
     {
-        riscv_printer.lw(temp_reg_name, "sp", stack_manager.get_value_stack_offset(store.value), riscv_context_manager);
+        throw std::runtime_error("visit: invalid store instruction, store.value->kind.tag = " + std::to_string(store.value->kind.tag));
     }
-    // 保存 store.dest 到栈中
-    stack_manager.save_value_to_stack(store.dest);
-    riscv_printer.sw(temp_reg_name, "sp", stack_manager.get_value_stack_offset(store.dest), riscv_context_manager);
+
+    // 判断 store.dest 是什么类型的
+    // 如果是全局变量, 则需要先获取地址, 再存储
+    if (store.dest->kind.tag == KOOPA_RVT_GLOBAL_ALLOC)
+    {
+        // 获取一个临时寄存器储存 store.dest 的地址
+        riscv_context_manager.allocate_reg(store.dest);
+        std::string temp_dst_reg_name = riscv_context_manager.value_to_reg_string(store.dest);
+        // 获取全局变量的地址
+        riscv_printer.la(temp_dst_reg_name, riscv_context_manager.get_global_var_name(store.dest));
+        // 存储全局变量的值
+        riscv_printer.sw(temp_src_reg_name, temp_dst_reg_name, 0, riscv_context_manager);
+        // 当前操作数所在的寄存器已经被使用过了, 释放
+        riscv_context_manager.set_reg_free(store.dest);
+    }
+    // 如果是栈上变量
+    else
+    {
+        // 保存 store.dest 到栈中
+        stack_manager.save_value_to_stack(store.dest);
+        riscv_printer.sw(temp_src_reg_name, "sp", stack_manager.get_value_stack_offset(store.dest), riscv_context_manager);
+    }
     // 当前操作数所在的寄存器已经被使用过了, 释放
     riscv_context_manager.set_reg_free(value);
 }
@@ -244,13 +453,13 @@ void visit(const koopa_raw_return_t &ret)
     // 根据 ret 的 value 类型判断后续需要如何访问
     if (ret.value)
     {
-        // 特判如果是立即数, 则直接赋值给 a0 寄存器, 跳过访问 value 的过程
+        // 如果是立即数, 则直接赋值给 a0 寄存器, 跳过访问 value 的过程
         if (ret.value->kind.tag == KOOPA_RVT_INTEGER)
         {
             riscv_printer.li("a0", ret.value->kind.data.integer.value);
         }
         // 否则, 访问这个值, 然后把这个值存储在的内存移动给 a0 寄存器, 注意不是 li
-        else
+        else if (ret.value->kind.tag == KOOPA_RVT_BINARY || ret.value->kind.tag == KOOPA_RVT_LOAD || ret.value->kind.tag == KOOPA_RVT_CALL)
         {
             // 当前函数的 StackManager
             StackManager &stack_manager = riscv_context_manager.get_current_function_stack_manager();
@@ -263,8 +472,12 @@ void visit(const koopa_raw_return_t &ret)
     {
         riscv_printer.li("a0", 0);
     }
-    // 恢复栈帧
+
+    // 当前函数的 StackManager
     StackManager &stack_manager = riscv_context_manager.get_current_function_stack_manager();
+    // 读取 ra 寄存器
+    riscv_printer.lw("ra", "sp", stack_manager.get_num_stack_frame_byte() - 4, riscv_context_manager);
+    // 恢复栈帧
     riscv_printer.addi("sp", "sp", stack_manager.get_num_stack_frame_byte(), riscv_context_manager);
     // 返回
     riscv_printer.ret();
@@ -273,12 +486,33 @@ void visit(const koopa_raw_return_t &ret)
 // 访问 binary 指令
 void visit(const koopa_raw_binary_t &binary, const koopa_raw_value_t &value)
 {
+    // 当前函数的 StackManager
+    StackManager &stack_manager = riscv_context_manager.get_current_function_stack_manager();
     // 判断 lhs 是立即数还是内存, 如果是立即数就 li, 否则就 lw
     riscv_context_manager.allocate_reg(binary.lhs);
     std::string lhs = riscv_context_manager.value_to_reg_string(binary.lhs);
     if (binary.lhs->kind.tag == KOOPA_RVT_INTEGER)
     {
         riscv_printer.li(lhs, binary.lhs->kind.data.integer.value);
+    }
+    else if (binary.lhs->kind.tag == KOOPA_RVT_FUNC_ARG_REF)
+    {
+        // 获取参数的索引
+        auto index = binary.lhs->kind.data.func_arg_ref.index;
+        // 前 8 个参数放在 a0 - a7 寄存器中
+        if (index < 8)
+        {
+            riscv_printer.mv(lhs, "a" + std::to_string(index));
+        }
+        // 后面的参数要从栈上找
+        else
+        {
+            // 先获取当前栈帧大小
+            int stack_size = stack_manager.get_num_stack_frame_byte();
+            int offset = 4 * (index - 8);
+            // 从上一个栈帧中获取
+            riscv_printer.lw(lhs, "sp", stack_size + offset, riscv_context_manager);
+        }
     }
     else
     {
@@ -293,6 +527,25 @@ void visit(const koopa_raw_binary_t &binary, const koopa_raw_value_t &value)
     if (binary.rhs->kind.tag == KOOPA_RVT_INTEGER)
     {
         riscv_printer.li(rhs, binary.rhs->kind.data.integer.value);
+    }
+    else if (binary.rhs->kind.tag == KOOPA_RVT_FUNC_ARG_REF)
+    {
+        // 获取参数的索引
+        auto index = binary.rhs->kind.data.func_arg_ref.index;
+        // 前 8 个参数放在 a0 - a7 寄存器中
+        if (index < 8)
+        {
+            riscv_printer.mv(rhs, "a" + std::to_string(index));
+        }
+        // 后面的参数要从栈上找
+        else
+        {
+            // 先获取当前栈帧大小
+            int stack_size = stack_manager.get_num_stack_frame_byte();
+            int offset = 4 * (index - 8);
+            // 从上一个栈帧中获取
+            riscv_printer.lw(rhs, "sp", stack_size + offset, riscv_context_manager);
+        }
     }
     else
     {
@@ -357,8 +610,6 @@ void visit(const koopa_raw_binary_t &binary, const koopa_raw_value_t &value)
     default:
         throw std::runtime_error("visit: invalid binary operator");
     }
-    // 当前函数的 StackManager
-    StackManager &stack_manager = riscv_context_manager.get_current_function_stack_manager();
     // 把结果存回栈中
     stack_manager.save_value_to_stack(value);
     riscv_printer.sw(cur, "sp", stack_manager.get_value_stack_offset(value), riscv_context_manager);

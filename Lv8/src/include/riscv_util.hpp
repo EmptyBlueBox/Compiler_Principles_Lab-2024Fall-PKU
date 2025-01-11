@@ -26,6 +26,7 @@ public:
     // 构造函数
     StackManager() : stack_size(0), stack_used_byte(0) {}
     StackManager(int stack_size) : stack_size(stack_size), stack_used_byte(0) {}
+    StackManager(int stack_size, int num_args_on_stack) : stack_size(stack_size), stack_used_byte(num_args_on_stack * 4) {}
 
     // 保存一个值到栈中, 然后栈帧使用情况自动增加 4 字节
     void save_value_to_stack(const koopa_raw_value_t &value);
@@ -51,6 +52,12 @@ public:
 class RISCVContextManager
 {
 private:
+    // 当前用了多少个全局变量
+    int global_var_index = 0;
+
+    // 值到第几个全局变量的映射
+    std::unordered_map<koopa_raw_value_t, int> _value_to_global_var_index;
+
     // 值到寄存器名称的映射
     std::unordered_map<koopa_raw_value_t, std::string> _value_to_reg_string;
 
@@ -90,6 +97,23 @@ public:
             _reg_is_used["a" + std::to_string(i)] = false;
         }
     }
+
+    /**
+     * @brief 初始化一个全局变量
+     * @param[in] value 值
+     * @author Yutong Liang
+     * @date 2024-12-22
+     */
+    void init_global_var(const koopa_raw_value_t &value);
+
+    /**
+     * @brief 获取一个全局变量的名称
+     * @param[in] value 值
+     * @return 全局变量的名称
+     * @author Yutong Liang
+     * @date 2024-12-22
+     */
+    std::string get_global_var_name(const koopa_raw_value_t &value);
 
     /**
      * @brief 设置一个值对应的寄存器为未占用, 当一个值被使用过之后, 我们将它占用的寄存器设置为未占用, 因为我们认为每一个结果只被使用一次
@@ -147,10 +171,11 @@ public:
      * @brief 初始化一个函数的栈管理器
      * @param[in] function_name 函数名
      * @param[in] stack_size 栈帧大小
+     * @param[in] num_args_on_stack 函数调用参数在栈上的数量, 这些位置不要存储局部变量
      * @author Yutong Liang
      * @date 2024-12-22
      */
-    void init_stack_manager_for_one_function(const std::string &function_name, int stack_size);
+    void init_stack_manager_for_one_function(const std::string &function_name, int stack_size, int num_args_on_stack);
 };
 
 /**
@@ -161,6 +186,16 @@ public:
 class RISCVPrinter
 {
 public:
+    // RISCV 语句
+    void data();
+    void text();
+    void globl(const std::string &name);
+    void word(const int &value);
+    void zero(const int &len);
+    void label(const std::string &name);
+
+    // 调用和返回
+    void call(const std::string &func_name);
     void ret();
 
     // 单目运算
@@ -179,10 +214,11 @@ public:
     void rem(const std::string &rd, const std::string &rs1, const std::string &rs2);
     void sgt(const std::string &rd, const std::string &rs1, const std::string &rs2);
     void slt(const std::string &rd, const std::string &rs1, const std::string &rs2);
-    void li(const std::string &rd, const int &imm);
 
-    // 访存
+    // 移动和访存
+    void li(const std::string &rd, const int &imm);
     void mv(const std::string &rd, const std::string &rs1);
+    void la(const std::string &rd, const std::string &rs1);
     void lw(const std::string &rd, const std::string &base, const int &bias, RISCVContextManager &context_manager);
     void sw(const std::string &rs1, const std::string &base, const int &bias, RISCVContextManager &context_manager);
 

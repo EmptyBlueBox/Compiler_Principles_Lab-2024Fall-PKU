@@ -2,6 +2,10 @@
 
 #include "include/riscv_util.hpp"
 
+////////////////////////////////////////////////////
+// StackManager
+////////////////////////////////////////////////////
+
 void StackManager::save_value_to_stack(const koopa_raw_value_t &value)
 {
     // 如果 value 不在 value_to_stack_offset 中, 则需要分配新的空间
@@ -37,6 +41,25 @@ int StackManager::get_value_stack_offset(const koopa_raw_value_t &value)
         throw std::runtime_error("get_value_stack_offset: value not found in this stack frame");
     }
     return value_to_stack_offset[value];
+}
+
+////////////////////////////////////////////////////
+// RISCVContextManager
+////////////////////////////////////////////////////
+
+void RISCVContextManager::init_global_var(const koopa_raw_value_t &value)
+{
+    _value_to_global_var_index[value] = global_var_index;
+    global_var_index++;
+}
+
+std::string RISCVContextManager::get_global_var_name(const koopa_raw_value_t &value)
+{
+    if (_value_to_global_var_index.find(value) == _value_to_global_var_index.end())
+    {
+        throw std::runtime_error("get_global_var_name: global variable not found");
+    }
+    return "global_var_" + std::to_string(_value_to_global_var_index[value]);
 }
 
 void RISCVContextManager::set_reg_free(const koopa_raw_value_t &value)
@@ -138,20 +161,67 @@ StackManager &RISCVContextManager::get_current_function_stack_manager()
     return _function_name_to_stack_manager[current_function_name];
 }
 
-void RISCVContextManager::init_stack_manager_for_one_function(const std::string &function_name, int stack_size)
+void RISCVContextManager::init_stack_manager_for_one_function(const std::string &function_name, int stack_size, int num_args_on_stack)
 {
     if (_function_name_to_stack_manager.find(function_name) != _function_name_to_stack_manager.end())
     {
         throw std::runtime_error("init_stack_manager_for_one_function: function already exists");
     }
-    _function_name_to_stack_manager[function_name] = StackManager(stack_size);
+    _function_name_to_stack_manager[function_name] = StackManager(stack_size, num_args_on_stack);
     current_function_name = function_name;
+}
+
+////////////////////////////////////////////////////
+// RISCV 语句
+////////////////////////////////////////////////////
+
+void RISCVPrinter::data()
+{
+    std::cout << "\n\t.data" << std::endl;
+}
+
+void RISCVPrinter::text()
+{
+    std::cout << "\n\t.text" << std::endl;
+}
+
+void RISCVPrinter::globl(const std::string &name)
+{
+    std::cout << "\t.globl " << name << std::endl;
+}
+
+void RISCVPrinter::word(const int &value)
+{
+    std::cout << "\t.word " << value << std::endl;
+}
+
+void RISCVPrinter::zero(const int &len)
+{
+    std::cout << "\t.zero " << len << std::endl;
+}
+
+void RISCVPrinter::label(const std::string &name)
+{
+    std::cout << name << ":" << std::endl;
+}
+
+////////////////////////////////////////////////////
+// 调用和返回
+////////////////////////////////////////////////////
+
+void RISCVPrinter::call(const std::string &func_name)
+{
+    std::cout << "\tcall " << func_name << std::endl;
 }
 
 void RISCVPrinter::ret()
 {
     std::cout << "\tret" << std::endl;
 }
+
+////////////////////////////////////////////////////
+// 单目运算
+////////////////////////////////////////////////////
 
 void RISCVPrinter::seqz(const std::string &rd, const std::string &rs1)
 {
@@ -162,6 +232,10 @@ void RISCVPrinter::snez(const std::string &rd, const std::string &rs1)
 {
     std::cout << "\tsnez " << rd << ", " << rs1 << std::endl;
 }
+
+////////////////////////////////////////////////////
+// 双目运算
+////////////////////////////////////////////////////
 
 void RISCVPrinter::or_(const std::string &rd, const std::string &rs1, const std::string &rs2)
 {
@@ -227,6 +301,10 @@ void RISCVPrinter::slt(const std::string &rd, const std::string &rs1, const std:
     std::cout << "\tslt " << rd << ", " << rs1 << ", " << rs2 << std::endl;
 }
 
+////////////////////////////////////////////////////
+// 移动和访存
+////////////////////////////////////////////////////
+
 void RISCVPrinter::li(const std::string &rd, const int &imm)
 {
     std::cout << "\tli " << rd << ", " << imm << std::endl;
@@ -235,6 +313,11 @@ void RISCVPrinter::li(const std::string &rd, const int &imm)
 void RISCVPrinter::mv(const std::string &rd, const std::string &rs1)
 {
     std::cout << "\tmv " << rd << ", " << rs1 << std::endl;
+}
+
+void RISCVPrinter::la(const std::string &rd, const std::string &rs1)
+{
+    std::cout << "\tla " << rd << ", " << rs1 << std::endl;
 }
 
 void RISCVPrinter::lw(const std::string &rd, const std::string &base, const int &bias, RISCVContextManager &context_manager)
@@ -268,6 +351,10 @@ void RISCVPrinter::sw(const std::string &rs1, const std::string &base, const int
         std::cout << "\tsw " << rs1 << ", " << "(" << reg << ")" << std::endl;
     }
 }
+
+////////////////////////////////////////////////////
+// 分支
+////////////////////////////////////////////////////
 
 void RISCVPrinter::bnez(const std::string &cond, const std::string &label)
 {

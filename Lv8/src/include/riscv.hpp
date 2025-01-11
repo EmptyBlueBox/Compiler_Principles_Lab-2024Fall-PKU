@@ -66,6 +66,15 @@ void visit(const koopa_raw_basic_block_t &bb);
 void visit(const koopa_raw_value_t &value);
 
 /**
+ * @brief 访问 RISC-V 汇编代码的一个全局分配指令
+ * @param[in] global_alloc 内存中的 RISC-V 汇编代码全局分配指令
+ * @param[in] value 这个全局分配指令本身的 value, 这是一个 **指针**
+ * @author Yutong Liang
+ * @date 2025-01-11
+ */
+void visit(const koopa_raw_global_alloc_t &global_alloc, const koopa_raw_value_t &value);
+
+/**
  * @brief 访问 RISC-V 汇编代码的一个 load 指令
  * @param[in] load 内存中的 RISC-V 汇编代码 load 指令
  * @author Yutong Liang
@@ -81,6 +90,14 @@ void visit(const koopa_raw_load_t &load, const koopa_raw_value_t &value);
  * @date 2024-12-23
  */
 void visit(const koopa_raw_store_t &store, const koopa_raw_value_t &value);
+
+/**
+ * @brief 访问 RISC-V 汇编代码的一个 call 指令
+ * @param[in] call 内存中的 RISC-V 汇编代码 call 指令本身, 带有 koopa_raw_value_t 类型的返回值
+ * @author Yutong Liang
+ * @date 2025-01-11
+ */
+void visit(const koopa_raw_call_t &call, const koopa_raw_value_t &value);
 
 /**
  * @brief 访问 RISC-V 汇编代码的一个返回指令
